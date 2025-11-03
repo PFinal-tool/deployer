@@ -2,6 +2,8 @@
 
 一个类似 Adminer.php 的单文件 PHP 代码部署工具，支持 Git + SSH 部署。
 
+![](https://raw.githubusercontent.com/pfinal-nc/iGallery/master/blog/202511031638328.png)
+
 ## 特性
 
 - 🚀 **单文件部署** - 类似 Adminer，一个 PHP 文件即可运行
