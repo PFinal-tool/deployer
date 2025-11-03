@@ -1,0 +1,23 @@
+# 存储目录（数据库和日志）
+storage/*.db
+storage/logs/*.log
+storage/deployer.db
+storage/deployer.db-journal
+
+# 编译后的单文件
+deployer-single.php
+
+# IDE 文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.bak
