@@ -68,10 +68,10 @@ class Compiler {
         
         // 处理视图文件并创建 ViewRenderer
         $this->output .= "//ViewRenderer\n";
-        $this->output .= "class ViewRenderer{\n";
-        $this->output .= "private static \$views=[];\n";
-        $this->output .= "public static function init(){\n";
-        $this->output .= "if(!empty(self::\$views))return;\n";
+        $this->output .= 'class ViewRenderer{' . "\n";
+        $this->output .= 'private static $views=[];' . "\n";
+        $this->output .= 'public static function init(){' . "\n";
+        $this->output .= 'if(!empty(self::$views))return;' . "\n";
         
         foreach ($this->views as $view) {
             $viewPath = __DIR__ . '/ui/views/' . $view;
@@ -82,7 +82,7 @@ class Compiler {
                 $viewContent = preg_replace('/^<\?php\s*/', '', $viewContent);
                 
                 // 移除文件开头的 php 标签（如果有）
-                $viewContent = preg_replace('/^\\?>\s*/', '', $viewContent);
+                $viewContent = preg_replace('/^\?>\s*/', '', $viewContent);
                 
                 // 移除 require_once 语句（单文件中类已内嵌）
                 // 匹配多行 require_once（支持换行），使用更精确的模式
@@ -93,7 +93,7 @@ class Compiler {
                 
                 // 移除不必要的变量赋值（如 $auth = new Auth();）
                 // 使用双引号字符串并正确转义
-                $pattern = "/\\\$auth\\s*=\\s*new\\s+Auth\\(\\);\\s*/s";
+                $pattern = '/\$auth\s*=\s*new\s+Auth\(\);\s*/s';
                 $viewContent = preg_replace($pattern, '', $viewContent);
                 
                 // 只移除文件末尾的 PHP 结束标签（保留中间的，因为它们在 eval 中需要）
@@ -114,11 +114,11 @@ class Compiler {
         }
         
         $this->output .= "}\n";
-        $this->output .= "public static function render(\$view,\$vars=[]){\n";
-        $this->output .= "self::init();\n";
+        $this->output .= 'public static function render($view,$vars=[]){' . "\n";
+        $this->output .= 'self::init();' . "\n";
         $this->output .= "if(!isset(self::\$views[\$view])){echo'View not found:'.\$view;return;}\n";
-        $this->output .= "extract(\$vars,EXTR_SKIP);\n";
-        $this->output .= "\$viewContent=self::\$views[\$view];ob_start();eval('?>'.(\$viewContent[0]==='<'?\$viewContent:'<?php '.\$viewContent));\$output=ob_get_clean();\$output=preg_replace('/^\\?>\s*/','',\$output);echo\$output;\n";
+        $this->output .= 'extract($vars,EXTR_SKIP);' . "\n";
+        $this->output .= "\$viewContent=self::\$views[\$view];ob_start();eval('?>'.(\$viewContent[0]==='<'?\$viewContent:'<?php '.\$viewContent));\$output=ob_get_clean();\$output=preg_replace('/^\\?>\\s*/','',\$output);echo\$output;\n";
         $this->output .= "}\n";
         $this->output .= "}\n\n";
         
@@ -130,13 +130,13 @@ class Compiler {
         
         // 替换渲染方法（匹配完整的方法体，包括嵌套花括号）
         $patterns = [
-            '/private function renderLogin\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderLogin(\$error=null){ViewRenderer::render('login',['error'=>\$error]);}",
-            '/private function renderDashboard\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderDashboard(\$projects,\$deployments){ViewRenderer::render('dashboard',['projects'=>\$projects,'deployments'=>\$deployments]);}",
-            '/private function renderProjects\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderProjects(\$projects){ViewRenderer::render('projects',['projects'=>\$projects]);}",
-            '/private function renderProjectEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderProjectEdit(\$project,\$servers){ViewRenderer::render('project_edit',['project'=>\$project,'servers'=>\$servers]);}",
-            '/private function renderServers\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderServers(\$servers){ViewRenderer::render('servers',['servers'=>\$servers]);}",
-            '/private function renderServerEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderServerEdit(\$server){ViewRenderer::render('server_edit',['server'=>\$server]);}",
-            '/private function renderDeployments\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => "private function renderDeployments(\$deployments){ViewRenderer::render('deployments',['deployments'=>\$deployments]);}",
+            '/private function renderLogin\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderLogin($error=null){ViewRenderer::render(\'login\',[\'error\'=>$error]);}',
+            '/private function renderDashboard\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDashboard($projects,$deployments){ViewRenderer::render(\'dashboard\',[\'projects\'=>$projects,\'deployments\'=>$deployments]);}',
+            '/private function renderProjects\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjects($projects){ViewRenderer::render(\'projects\',[\'projects\'=>$projects]);}',
+            '/private function renderProjectEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjectEdit($project,$servers){ViewRenderer::render(\'project_edit\',[\'project\'=>$project,\'servers\'=>$servers]);}',
+            '/private function renderServers\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderServers($servers){ViewRenderer::render(\'servers\',[\'servers\'=>$servers]);}',
+            '/private function renderServerEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderServerEdit($server){ViewRenderer::render(\'server_edit\',[\'server\'=>$server]);}',
+            '/private function renderDeployments\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDeployments($deployments){ViewRenderer::render(\'deployments\',[\'deployments\'=>$deployments]);}',
         ];
         
         foreach ($patterns as $pattern => $replacement) {
@@ -147,7 +147,7 @@ class Compiler {
         $this->output .= "//Router\n" . $routerContent . "\n";
         
         // 添加主入口（添加错误处理，默认显示错误）
-        $this->output .= "if(php_sapi_name()!=='cli'){try{Logger::init();Database::getInstance();\$router=new Router();\$router->handle();}catch(Throwable \$e){error_log('Deployer Error: '.\$e->getMessage().' in '.\$e->getFile().':'.\$e->getLine().PHP_EOL.\$e->getTraceAsString());if(!headers_sent()){header('Content-Type: text/html; charset=UTF-8');}echo'<h1>Error</h1><pre>'.htmlspecialchars(\$e->getMessage().PHP_EOL.\$e->getFile().':'.\$e->getLine().PHP_EOL.\$e->getTraceAsString()).'</pre>';exit;}}\n";
+        $this->output .= 'if(php_sapi_name()!==\'cli\'){try{Logger::init();Database::getInstance();$router=new Router();$router->handle();}catch(Throwable $e){error_log(\'Deployer Error: \' . $e->getMessage() . \' in \' . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString());if(!headers_sent()){header(\'Content-Type: text/html; charset=UTF-8\');}echo \'<h1>Error</h1><pre>\' . htmlspecialchars($e->getMessage() . PHP_EOL . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString()) . \'</pre>\';exit;}}' . "\n";
         
         // 最终压缩
         $this->output = $this->minifyCode($this->output);
@@ -165,26 +165,23 @@ class Compiler {
         $placeholder = '___HEREDOC___';
         $index = 0;
         
-        // 提取 heredoc（包括 CSS）
+        // 提取 heredoc（包括 CSS/JS）
         $content = preg_replace_callback(
-            '/<<<[\'"]?(\w+)[\'"]?\s*\n(.*?)\n\1;?/s',
+            "/<<<['\"]?(\\w+)['\"]?\\s*\\n([\\s\\S]*?)\\n\\1;?/s",
             function($m) use (&$heredocs, &$index, $placeholder) {
                 $key = $placeholder . ($index++);
-                // 如果是 CSS 内容，进行压缩
-                if (strpos($m[2], '<style>') !== false || strpos($m[2], 'margin:') !== false) {
-                    $cssContent = $m[2];
-                    // 提取 CSS 内容（在 <style> 标签内）
-                    if (preg_match('/<style>(.*?)<\/style>/s', $cssContent, $cssMatch)) {
-                        $css = $cssMatch[1];
-                        $cssMinified = $this->minifyCSS($css);
-                        $cssContent = str_replace($cssMatch[1], $cssMinified, $cssContent);
-                    }
-                    // 保持 heredoc 语法正确
-                    $heredocs[$key] = "<<<'{$m[1]}'\n{$cssContent}\n{$m[1]};";
-                } else {
-                    // 保持原始 heredoc 语法
-                    $heredocs[$key] = "<<<'{$m[1]}'\n{$m[2]}\n{$m[1]};";
+                $block = $m[2];
+                // 压缩 CSS
+                if (preg_match('/<style>(.*?)<\\/style>/s', $block, $cssMatch)) {
+                    $minCss = $this->minifyCSS($cssMatch[1]);
+                    $block = str_replace($cssMatch[1], $minCss, $block);
                 }
+                // 压缩 JS
+                if (preg_match('/<script>(.*?)<\\/script>/s', $block, $jsMatch)) {
+                    $minJs = $this->minifyJS($jsMatch[1]);
+                    $block = str_replace($jsMatch[1], $minJs, $block);
+                }
+                $heredocs[$key] = "<<<'{$m[1]}'\n{$block}\n{$m[1]};";
                 return $key;
             },
             $content
@@ -253,6 +250,20 @@ class Compiler {
         $css = trim($css);
         
         return $css;
+    }
+
+    private function minifyJS($js) {
+        // 移除块注释
+        $js = preg_replace('/\/\*[\s\S]*?\*\//', '', $js);
+        // 移除行注释（尽量避免误伤：在分隔符或空白后出现的 //）
+        $js = preg_replace('/(^|[;{}()\[\]\s])\/\/[^\n]*$/m', '$1', $js);
+        // 压缩空白
+        $js = preg_replace('/\s+/', ' ', $js);
+        // 去除符号两侧空白
+        $js = preg_replace('/\s*([{}();,:=\[\]+\-<>\|&])\s*/', '$1', $js);
+        // 规范分号
+        $js = preg_replace('/;\s+/', ';', $js);
+        return trim($js);
     }
 }
 
