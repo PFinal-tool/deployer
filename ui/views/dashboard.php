@@ -37,6 +37,39 @@ require_once __DIR__ . '/../../lang/zh.php';
   <br>
   <table>
     <thead>
+      <tr><th colspan="4">环境检测</th></tr>
+      <tr>
+        <th>检测项</th>
+        <th>状态</th>
+        <th>值</th>
+        <th>说明</th>
+      </tr>
+    </thead>
+    <tbody>
+      <?php if (!empty($envCheck)): foreach ($envCheck as $check): ?>
+        <tr>
+          <td><?php echo htmlspecialchars($check['name']); ?></td>
+          <td>
+            <?php if ($check['status'] === 'ok'): ?>
+              <span style="color:green">✓ 正常</span>
+            <?php elseif ($check['status'] === 'warning'): ?>
+              <span style="color:orange">⚠ 警告</span>
+            <?php else: ?>
+              <span style="color:red">✗ 错误</span>
+            <?php endif; ?>
+          </td>
+          <td><?php echo htmlspecialchars($check['value']); ?></td>
+          <td><?php echo htmlspecialchars($check['message']); ?></td>
+        </tr>
+      <?php endforeach; else: ?>
+        <tr><td colspan="4">环境检测中...</td></tr>
+      <?php endif; ?>
+    </tbody>
+  </table>
+
+  <br>
+  <table>
+    <thead>
       <tr><th colspan="3">最近项目</th></tr>
       <tr>
         <th><?php echo Lang::get('project_name'); ?></th>

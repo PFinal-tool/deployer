@@ -48,6 +48,9 @@ class Router {
             case 'server_delete':
                 $this->handleServerDelete();
                 break;
+            case 'server_test':
+                $this->handleServerTest();
+                break;
             case 'deploy':
                 $this->handleDeploy();
                 break;
@@ -70,10 +73,13 @@ class Router {
             $username = $_POST['username'] ?? '';
             $password = $_POST['password'] ?? '';
             
+            Logger::info("Login attempt: username={$username}");
             if ($this->auth->login($username, $password)) {
+                Logger::info("Login successful: username={$username}");
                 header('Location: ?action=dashboard');
                 exit;
             } else {
+                Logger::warning("Login failed: username={$username}");
                 $error = '用户名或密码错误';
             }
         }
@@ -82,6 +88,7 @@ class Router {
     }
     
     private function handleLogout() {
+        Logger::info("User logout");
         $this->auth->logout();
         header('Location: ?action=login');
         exit;
@@ -98,7 +105,159 @@ class Router {
             LIMIT 10
         ");
         
-        $this->renderDashboard($projects, $recentDeployments);
+        // 环境检测
+        $envCheck = $this->checkEnvironment();
+        
+        $this->renderDashboard($projects, $recentDeployments, $envCheck);
+    }
+    
+    /**
+     * 检查 sshpass 是否可用（用于环境检测）
+     */
+    private function checkSshpassForEnv() {
+        // 方法1: 使用 command -v（优先使用完整路径）
+        $path = trim(shell_exec('command -v sshpass 2>/dev/null') ?? '');
+        if ($path !== '' && file_exists($path)) {
+            return $path;
+        }
+        
+        // 方法2: 使用 which
+        $path = trim(shell_exec('which sshpass 2>/dev/null') ?? '');
+        if ($path !== '' && file_exists($path)) {
+            return $path;
+        }
+        
+        // 方法3: 尝试常见路径
+        $commonPaths = ['/usr/bin/sshpass', '/usr/local/bin/sshpass', '/bin/sshpass'];
+        foreach ($commonPaths as $commonPath) {
+            if (file_exists($commonPath) && is_executable($commonPath)) {
+                return $commonPath;
+            }
+        }
+        
+        // 方法4: 尝试直接执行 sshpass -V 来验证（最后的手段）
+        $output = @shell_exec('sshpass -V 2>&1');
+        if ($output !== null && strpos($output, 'sshpass') !== false) {
+            // 如果能执行，尝试找到完整路径
+            $envPath = getenv('PATH');
+            if ($envPath) {
+                $paths = explode(':', $envPath);
+                foreach ($paths as $p) {
+                    $fullPath = rtrim($p, '/') . '/sshpass';
+                    if (file_exists($fullPath) && is_executable($fullPath)) {
+                        return $fullPath;
+                    }
+                }
+            }
+            return 'sshpass';
+        }
+        
+        return '';
+    }
+    
+    /**
+     * 环境检测
+     */
+    private function checkEnvironment() {
+        $checks = [];
+        
+        // PHP 版本
+        $phpVersion = PHP_VERSION;
+        $phpVersionOk = version_compare($phpVersion, '7.4.0', '>=');
+        $checks[] = [
+            'name' => 'PHP 版本',
+            'value' => $phpVersion,
+            'status' => $phpVersionOk ? 'ok' : 'error',
+            'message' => $phpVersionOk ? '版本符合要求' : '需要 PHP 7.4 或更高版本'
+        ];
+        
+        // PDO 扩展
+        $pdoExists = extension_loaded('pdo');
+        $checks[] = [
+            'name' => 'PDO 扩展',
+            'value' => $pdoExists ? '已安装' : '未安装',
+            'status' => $pdoExists ? 'ok' : 'error',
+            'message' => $pdoExists ? '' : '需要安装 PDO 扩展'
+        ];
+        
+        // SQLite PDO 驱动
+        $pdoSqliteExists = extension_loaded('pdo_sqlite');
+        $checks[] = [
+            'name' => 'PDO SQLite 驱动',
+            'value' => $pdoSqliteExists ? '已安装' : '未安装',
+            'status' => $pdoSqliteExists ? 'ok' : 'error',
+            'message' => $pdoSqliteExists ? '' : '需要安装 pdo_sqlite 扩展'
+        ];
+        
+        // sshpass 工具
+        $sshpassPath = $this->checkSshpassForEnv();
+        $sshpassExists = $sshpassPath !== '';
+        $checks[] = [
+            'name' => 'sshpass 工具',
+            'value' => $sshpassExists ? '已安装' : '未安装',
+            'status' => $sshpassExists ? 'ok' : 'warning',
+            'message' => $sshpassExists ? ($sshpassPath !== 'sshpass' ? "路径: {$sshpassPath}" : '') : '如需使用密码认证，请安装 sshpass'
+        ];
+        
+        // Git 工具
+        $gitPath = trim(shell_exec('command -v git') ?? '');
+        $gitExists = $gitPath !== '';
+        $checks[] = [
+            'name' => 'Git 工具',
+            'value' => $gitExists ? '已安装' : '未安装',
+            'status' => $gitExists ? 'ok' : 'warning',
+            'message' => $gitExists ? '' : '需要 Git 工具用于代码部署'
+        ];
+        
+        // SSH 客户端
+        $sshPath = trim(shell_exec('command -v ssh') ?? '');
+        $sshExists = $sshPath !== '';
+        $checks[] = [
+            'name' => 'SSH 客户端',
+            'value' => $sshExists ? '已安装' : '未安装',
+            'status' => $sshExists ? 'ok' : 'error',
+            'message' => $sshExists ? '' : '需要 SSH 客户端'
+        ];
+        
+        // 存储目录权限
+        $storageDir = __DIR__ . '/../storage';
+        $logsDir = $storageDir . '/logs';
+        $storageWritable = is_writable($storageDir) || (is_dir($storageDir) && is_writable($storageDir));
+        $logsWritable = is_dir($logsDir) ? is_writable($logsDir) : true;
+        $checks[] = [
+            'name' => '存储目录权限',
+            'value' => $storageWritable ? '可写' : '不可写',
+            'status' => $storageWritable ? 'ok' : 'error',
+            'message' => $storageWritable ? '' : 'storage 目录需要可写权限'
+        ];
+        
+        // 数据库连接
+        try {
+            $db = Database::getInstance();
+            $db->query("SELECT 1");
+            $dbOk = true;
+            $dbMessage = '';
+        } catch (Exception $e) {
+            $dbOk = false;
+            $dbMessage = $e->getMessage();
+        }
+        $checks[] = [
+            'name' => '数据库连接',
+            'value' => $dbOk ? '正常' : '失败',
+            'status' => $dbOk ? 'ok' : 'error',
+            'message' => $dbMessage
+        ];
+        
+        // 时区设置
+        $timezone = date_default_timezone_get();
+        $checks[] = [
+            'name' => '时区设置',
+            'value' => $timezone,
+            'status' => 'ok',
+            'message' => ''
+        ];
+        
+        return $checks;
     }
     
     private function handleProjects() {
@@ -129,11 +288,21 @@ class Router {
                 'branch' => $_POST['branch'] ?? 'master',
                 'deploy_path' => $_POST['deploy_path'] ?? '',
                 'server_id' => $_POST['server_id'] ?? 0,
+                'git_username' => $_POST['git_username'] ?? null,
+                'git_password' => $_POST['git_password'] ?? null,
                 'pre_deploy_script' => $_POST['pre_deploy_script'] ?? '',
                 'post_deploy_script' => $_POST['post_deploy_script'] ?? '',
                 'webhook_enabled' => isset($_POST['webhook_enabled']) ? 1 : 0,
                 'updated_at' => date('Y-m-d H:i:s')
             ];
+            
+            // 编辑时，如果密码为空则保留旧密码
+            if ($id && $project) {
+                $gitPassword = trim($_POST['git_password'] ?? '');
+                if ($gitPassword === '') {
+                    $data['git_password'] = $project['git_password'] ?? null;
+                }
+            }
             
             if ($id) {
                 $db->update('projects', $data, 'id = ?', [$id]);
@@ -188,18 +357,51 @@ class Router {
                 'updated_at' => date('Y-m-d H:i:s')
             ];
             
-            // 如果有上传密钥文件
-            if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) {
-                $keyContent = file_get_contents($_FILES['key_file']['tmp_name']);
-                $data['key_content'] = base64_encode($keyContent);
-            } elseif ($id && $server && !empty($server['key_content'])) {
-                // 保留原有密钥
-                $data['key_content'] = $server['key_content'];
+            // 处理密码：编辑时如果密码字段为空则保留旧密码，新增时如果为空则保存 null
+            $hasNewPassword = false;
+            if ($id && $server) {
+                // 编辑模式：如果密码字段为空字符串，保留旧密码；如果不为空，更新为新密码
+                $password = trim($_POST['password'] ?? '');
+                if ($password !== '') {
+                    $data['password'] = $password;
+                    $hasNewPassword = true;
+                    Logger::debug("Password field updated, length=" . strlen($password));
+                } else {
+                    // 保留原有密码
+                    $data['password'] = $server['password'] ?? null;
+                    $hasNewPassword = isset($server['password']) && $server['password'] !== null && $server['password'] !== '';
+                    Logger::debug("Password field empty, keeping old password, old_password_length=" . (isset($server['password']) && $server['password'] !== null ? strlen($server['password']) : 0));
+                }
+            } else {
+                // 新增模式：如果密码字段不为空，保存密码；否则保存 null
+                $password = trim($_POST['password'] ?? '');
+                $data['password'] = $password !== '' ? $password : null;
+                $hasNewPassword = $password !== '';
+                Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null'));
+            }
+            
+            // 如果有密码，清空密钥（密码认证优先）
+            if ($hasNewPassword) {
+                $data['key_path'] = '';
+                $data['key_content'] = null;
+                Logger::info("Password provided, clearing key_path and key_content (password auth takes priority)");
+            } else {
+                // 如果有上传密钥文件
+                if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) {
+                    $keyContent = file_get_contents($_FILES['key_file']['tmp_name']);
+                    $data['key_content'] = base64_encode($keyContent);
+                    Logger::info("Server edit: uploaded key file, size=" . strlen($keyContent) . " bytes");
+                } elseif ($id && $server && !empty($server['key_content'])) {
+                    // 保留原有密钥
+                    $data['key_content'] = $server['key_content'];
+                }
             }
             
             if ($id) {
+                Logger::info("Updating server: id={$id}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
                 $db->update('servers', $data, 'id = ?', [$id]);
             } else {
+                Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
                 $data['created_at'] = date('Y-m-d H:i:s');
                 $id = $db->insert('servers', $data);
             }
@@ -214,8 +416,58 @@ class Router {
     private function handleServerDelete() {
         $id = $_GET['id'] ?? null;
         if ($id) {
+            Logger::info("Deleting server: id={$id}");
             $db = Database::getInstance();
             $db->delete('servers', 'id = ?', [$id]);
+        }
+        header('Location: ?action=servers');
+        exit;
+    }
+    
+    private function handleServerTest() {
+        $id = $_GET['id'] ?? null;
+        if (!$id) {
+            Logger::warning("Server test failed: missing server ID");
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '缺少服务器 ID'];
+            header('Location: ?action=servers');
+            exit;
+        }
+        $db = Database::getInstance();
+        $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$id]);
+        if (!$server) {
+            Logger::warning("Server test failed: server not found, id={$id}");
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '服务器不存在'];
+            header('Location: ?action=servers');
+            exit;
+        }
+        Logger::info("Testing server connection: id={$id}, name={$server['name']}, host={$server['host']}:{$server['port']}, user={$server['username']}");
+        Logger::debug("Server password check: has_password=" . (isset($server['password']) && $server['password'] !== null && $server['password'] !== '' ? 'yes' : 'no') . ", password_length=" . (isset($server['password']) ? strlen($server['password']) : 0));
+        try {
+            $sshConfig = [
+                'host' => $server['host'],
+                'port' => $server['port'],
+                'username' => $server['username'],
+                'key_path' => $server['key_path'] ?? '',
+                'key_content' => $server['key_content'] ?? null,
+                'password' => $server['password'] ?? null, // 直接使用密码，不在这里隐藏
+            ];
+            // 记录配置（隐藏密码用于日志）
+            $logConfig = $sshConfig;
+            $logConfig['password'] = isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? '***[HIDDEN]' : null;
+            Logger::debug("SSH config (password hidden for security): " . json_encode($logConfig));
+            Logger::debug("Password actually used: " . (isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? 'present(' . strlen($sshConfig['password']) . ' chars)' : 'not set'));
+            $exec = new SSHExecutor($sshConfig);
+            $ok = $exec->testConnection();
+            if ($ok) {
+                Logger::info("Server connection test successful: id={$id}, name={$server['name']}");
+                $_SESSION['flash'] = ['type' => 'success', 'message' => '连接成功'];
+            } else {
+                Logger::error("Server connection test failed: id={$id}, name={$server['name']}");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败'];
+            }
+        } catch (Exception $e) {
+            Logger::error("Server connection test exception: id={$id}, name={$server['name']}, error=" . $e->getMessage() . ", trace=" . $e->getTraceAsString());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败：' . $e->getMessage()];
         }
         header('Location: ?action=servers');
         exit;
@@ -316,7 +568,7 @@ class Router {
         }
     }
     
-    private function renderDashboard($projects, $deployments) {
+    private function renderDashboard($projects, $deployments, $envCheck = []) {
         $viewPath = __DIR__ . '/../ui/views/dashboard.php';
         if (file_exists($viewPath)) {
             include $viewPath;

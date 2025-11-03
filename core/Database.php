@@ -50,9 +50,20 @@ class Database {
             username TEXT NOT NULL,
             key_path TEXT,
             key_content TEXT,
+            password TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+
+        // 兼容已有表，增加 password 字段
+        $cols = $this->db->query("PRAGMA table_info(servers)")->fetchAll();
+        $hasPassword = false;
+        foreach ($cols as $col) {
+            if (($col['name'] ?? '') === 'password') { $hasPassword = true; break; }
+        }
+        if (!$hasPassword) {
+            $this->db->exec("ALTER TABLE servers ADD COLUMN password TEXT");
+        }
         
         // 项目表
         $this->db->exec("CREATE TABLE IF NOT EXISTS projects (
@@ -62,6 +73,8 @@ class Database {
             branch TEXT DEFAULT 'master',
             deploy_path TEXT NOT NULL,
             server_id INTEGER NOT NULL,
+            git_username TEXT,
+            git_password TEXT,
             pre_deploy_script TEXT,
             post_deploy_script TEXT,
             webhook_enabled INTEGER DEFAULT 0,
@@ -70,6 +83,21 @@ class Database {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (server_id) REFERENCES servers(id)
         )");
+        
+        // 兼容已有表，增加 git_username 和 git_password 字段
+        $cols = $this->db->query("PRAGMA table_info(projects)")->fetchAll();
+        $hasGitUsername = false;
+        $hasGitPassword = false;
+        foreach ($cols as $col) {
+            if (($col['name'] ?? '') === 'git_username') { $hasGitUsername = true; }
+            if (($col['name'] ?? '') === 'git_password') { $hasGitPassword = true; }
+        }
+        if (!$hasGitUsername) {
+            $this->db->exec("ALTER TABLE projects ADD COLUMN git_username TEXT");
+        }
+        if (!$hasGitPassword) {
+            $this->db->exec("ALTER TABLE projects ADD COLUMN git_password TEXT");
+        }
         
         // 部署历史表
         $this->db->exec("CREATE TABLE IF NOT EXISTS deployments (

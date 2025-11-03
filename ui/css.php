@@ -18,12 +18,14 @@ a.btn-small{padding:2px 6px;font-size:12px}
 .form{width:700px;margin:30px auto}
 .form th{width:180px;white-space:nowrap;background:#fafafa}
 .alert{border:1px solid #c00;background:#fee;color:#900;padding:6px;margin:8px 0}
+.alert-success{border:1px solid #0a0;background:#efe;color:#060;padding:6px;margin:8px 0}
 .note{color:#777;font-size:12px}
 .code{background:#f7f7f7;border:1px solid #eee;padding:8px;white-space:pre-wrap}
 .badge{display:inline-block;padding:2px 6px;border:1px solid #aaa;background:#fafafa}
 .badge-success{border-color:#0a0;background:#efe}
 .badge-danger{border-color:#a00;background:#fee}
 .badge-warning{border-color:#a60;background:#fffae5}
+.log-output{background:#f7f7f7;border:1px solid #ddd;padding:10px;max-height:400px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:12px;line-height:1.4}
 </style>
 CSS;
 }

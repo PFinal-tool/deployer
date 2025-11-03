@@ -61,13 +61,16 @@ class Compiler {
             if ($file === 'core/Database.php') {
                 $content = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage\/deployer\.db'/", "__DIR__ . '/storage/deployer.db'", $content);
             }
+            if ($file === 'core/Router.php') {
+                $content = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage'/", "__DIR__ . '/storage'", $content);
+            }
             
             $content = $this->minifyCode($content);
-            $this->output .= "//" . $file . "\n" . $content . "\n";
+            // 不输出文件标记注释，直接追加内容
+            $this->output .= $content . "\n";
         }
         
         // 处理视图文件并创建 ViewRenderer
-        $this->output .= "//ViewRenderer\n";
         $this->output .= 'class ViewRenderer{' . "\n";
         $this->output .= 'private static $views=[];' . "\n";
         $this->output .= 'public static function init(){' . "\n";
@@ -101,6 +104,9 @@ class Compiler {
                 // 所以视图中的 PHP 标签需要保留结束标签
                 $viewContent = preg_replace('/\?>\s*$/', '', $viewContent);
                 
+                // 移除 HTML 注释
+                $viewContent = preg_replace('/<!--[\s\S]*?-->/', '', $viewContent);
+                
                 // 移除连续的空行
                 $viewContent = preg_replace('/\n\s*\n+/', "\n", $viewContent);
                 $viewContent = trim($viewContent);
@@ -131,7 +137,7 @@ class Compiler {
         // 替换渲染方法（匹配完整的方法体，包括嵌套花括号）
         $patterns = [
             '/private function renderLogin\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderLogin($error=null){ViewRenderer::render(\'login\',[\'error\'=>$error]);}',
-            '/private function renderDashboard\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDashboard($projects,$deployments){ViewRenderer::render(\'dashboard\',[\'projects\'=>$projects,\'deployments\'=>$deployments]);}',
+            '/private function renderDashboard\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDashboard($projects,$deployments,$envCheck=[]){ViewRenderer::render(\'dashboard\',[\'projects\'=>$projects,\'deployments\'=>$deployments,\'envCheck\'=>$envCheck]);}',
             '/private function renderProjects\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjects($projects){ViewRenderer::render(\'projects\',[\'projects\'=>$projects]);}',
             '/private function renderProjectEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjectEdit($project,$servers){ViewRenderer::render(\'project_edit\',[\'project\'=>$project,\'servers\'=>$servers]);}',
             '/private function renderServers\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderServers($servers){ViewRenderer::render(\'servers\',[\'servers\'=>$servers]);}',
@@ -144,7 +150,7 @@ class Compiler {
         }
         
         $routerContent = $this->minifyCode($routerContent);
-        $this->output .= "//Router\n" . $routerContent . "\n";
+        $this->output .= $routerContent . "\n";
         
         // 添加主入口（添加错误处理，默认显示错误）
         $this->output .= 'if(php_sapi_name()!==\'cli\'){try{Logger::init();Database::getInstance();$router=new Router();$router->handle();}catch(Throwable $e){error_log(\'Deployer Error: \' . $e->getMessage() . \' in \' . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString());if(!headers_sent()){header(\'Content-Type: text/html; charset=UTF-8\');}echo \'<h1>Error</h1><pre>\' . htmlspecialchars($e->getMessage() . PHP_EOL . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString()) . \'</pre>\';exit;}}' . "\n";
@@ -187,11 +193,30 @@ class Compiler {
             $content
         );
         
+        // 保护包含通配符的 rm -rf 命令，防止字符串片段被误处理
+        $specialPlaceholders = [];
+        $spIndex = 0;
+        $content = preg_replace_callback(
+            '/"rm\s*-rf\s*"\s*\.\s*escapeshellarg\(\$this->n?\s*deployPath\)\s*\.\s*"\s*\/\*\s*"\s*\.\s*escapeshellarg\(\$this->n?\s*deployPath\)\s*\.\s*"\s*\/\.\*\s*"\s*2>\/dev\/null\s*\|\|\s*true/',
+            function($m) use (&$specialPlaceholders, &$spIndex) {
+                $k = '___RM_RF___' . ($spIndex++);
+                $specialPlaceholders[$k] = $m[0];
+                return $k;
+            },
+            $content
+        );
+        
+        // 移除 HTML 注释
+        $content = preg_replace('/<!--[\s\S]*?-->/', '', $content);
+
         // 移除多行注释
         $content = preg_replace('/\/\*[\s\S]*?\*\//', '', $content);
-        
-        // 移除单行注释（小心字符串）
-        $content = preg_replace('/(?<!["\'])\/\/.*$/m', '', $content);
+
+        // 移除单行注释（PHP/JS）：行首或分隔符后出现的 //
+        $content = preg_replace('/(^|[;{}()\[\]\s])\/\/[^\n]*$/m', '$1', $content);
+
+        // 移除以 # 开头的单行注释（PHP）
+        $content = preg_replace('/(^|[;{}()\[\]\s])#.*$/m', '$1', $content);
         
         // 压缩空白（但要保护 SQL 语句中的关键字）
         // 先保护 SQL 关键字周围的空格
@@ -220,9 +245,41 @@ class Compiler {
         // 修复 WHERE 关键字后的空格
         $content = preg_replace('/\{(\$table)\}WHERE/', '{$1} WHERE', $content);
         
+        // 修复 UPDATE ... SET 之间的空格（多种情况）
+        $content = preg_replace('/UPDATE\{(\$table)\}SET/', 'UPDATE {$1} SET', $content);
+        $content = preg_replace('/\"UPDATE\{(\$table)\}SET/', '"UPDATE {$1} SET', $content);
+        $content = preg_replace('/\{(\$table)\}SET/', '{$1} SET', $content);
+        
+        // 修复 SET ... WHERE 之间的空格
+        $content = preg_replace('/SET\{(\$setStr)\}WHERE/', 'SET {$1} WHERE', $content);
+        $content = preg_replace('/\{(\$setStr)\}WHERE/', '{$1} WHERE', $content);
+        
+        // 修复字段名后的等号（字段名 = :字段名）
+        $content = preg_replace('/\{(\$field)\}=/', '{$1} =', $content);
+        
+        // （rm -rf 通配符由上面的整体占位保护）
+        
+        // 修复 env PATH= 和命令之间的空格（防止被压缩掉）
+        $content = preg_replace('/env PATH=\'([^\']+)\'([a-zA-Z])/', "env PATH='$1' $2", $content);
+        $content = preg_replace('/env PATH="([^"]+)"([a-zA-Z])/', 'env PATH="$1" $2', $content);
+        // 修复 env PATH={$...}" . trim($...) 中缺少空格的情况
+        $content = preg_replace('/env PATH=\{(\$[^}]+)\}"\.trim\(/', 'env PATH={$1} " . trim(', $content);
+        $content = preg_replace('/env PATH=\{(\$[^}]+)\}([a-zA-Z])/', 'env PATH={$1} $2', $content);
+        // 修复 export PATH=... && 后面缺少空格的情况
+        $content = preg_replace('/export PATH=\{(\$[^}]+)\}&&/', 'export PATH={$1} && ', $content);
+        $content = preg_replace('/export PATH=\'([^\']+)\'&&/', "export PATH='$1' && ", $content);
+        $content = preg_replace('/export PATH="([^"]+)"&&/', 'export PATH="$1" && ', $content);
+        
         // 恢复 heredoc
         foreach ($heredocs as $key => $value) {
             $content = str_replace($key, $value, $content);
+        }
+        
+        // 恢复 rm -rf 特殊占位符（并规范空白）
+        foreach ($specialPlaceholders as $k => $orig) {
+            $norm = preg_replace('/\s+/', ' ', $orig);
+            $norm = trim($norm);
+            $content = str_replace($k, $norm, $content);
         }
         
         return trim($content);

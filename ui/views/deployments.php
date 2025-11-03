@@ -64,10 +64,20 @@ function showLog(deploymentId){
   const content=document.getElementById('log-content-'+deploymentId);
   if(row.style.display==='none'){
     row.style.display='';
-    fetch('?action=api&endpoint=deploy_log&deployment_id='+deploymentId)
-      .then(res=>res.json())
-      .then(data=>{content.textContent=data.output||data.error||'暂无日志';});
-  }else{row.style.display='none';}
+    if(content.textContent==='加载中...'){
+      fetch('?action=api&endpoint=deploy_log&deployment_id='+deploymentId)
+        .then(res=>res.json())
+        .then(data=>{
+          const logText=data.output||data.error||'暂无日志';
+          content.textContent=logText;
+        })
+        .catch(err=>{
+          content.textContent='加载日志失败: '+err.message;
+        });
+    }
+  }else{
+    row.style.display='none';
+  }
 }
 </script>
 </body>

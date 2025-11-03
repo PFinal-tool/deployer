@@ -7,12 +7,16 @@ class GitDeployer {
     private $repoUrl;
     private $branch;
     private $deployPath;
+    private $gitUsername;
+    private $gitPassword;
     
-    public function __construct($sshExecutor, $repoUrl, $branch, $deployPath) {
+    public function __construct($sshExecutor, $repoUrl, $branch, $deployPath, $gitUsername = null, $gitPassword = null) {
         $this->sshExecutor = $sshExecutor;
         $this->repoUrl = $repoUrl;
         $this->branch = $branch;
         $this->deployPath = $deployPath;
+        $this->gitUsername = $gitUsername;
+        $this->gitPassword = $gitPassword;
     }
     
     /**
@@ -31,9 +35,24 @@ class GitDeployer {
             $this->sshExecutor->execute("mkdir -p " . escapeshellarg($this->deployPath));
             $output[] = $this->sshExecutor->execute($this->buildCloneCommand());
         } else {
-            // 目录存在，拉取更新
-            $output[] = "Pulling latest changes...";
-            $output[] = $this->sshExecutor->execute($this->buildPullCommand());
+            // 目录存在，检查是否是 git 仓库
+            $checkGit = "cd " . escapeshellarg($this->deployPath) . " && git rev-parse --git-dir > /dev/null 2>&1 && echo 'is_git' || echo 'not_git'";
+            $isGitRepo = trim($this->sshExecutor->execute($checkGit));
+            
+            if ($isGitRepo !== 'is_git') {
+                // 目录存在但不是 git 仓库，先清空目录再克隆（用 find 避免通配符被压缩破坏）
+                $output[] = "Directory exists but is not a git repository, cleaning and cloning...";
+                $cleanCmd = sprintf(
+                    "cd %s && find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+                    escapeshellarg($this->deployPath)
+                );
+                $this->sshExecutor->execute($cleanCmd);
+                $output[] = $this->sshExecutor->execute($this->buildCloneCommand());
+            } else {
+                // 目录存在且是 git 仓库，拉取更新
+                $output[] = "Pulling latest changes...";
+                $output[] = $this->sshExecutor->execute($this->buildPullCommand());
+            }
         }
         
         // 2. 获取当前提交信息
@@ -52,26 +71,71 @@ class GitDeployer {
      * 构建克隆命令
      */
     private function buildCloneCommand() {
+        $url = $this->buildAuthenticatedUrl();
         $cmd = sprintf(
             "cd %s && git clone -b %s %s .",
             escapeshellarg($this->deployPath),
             escapeshellarg($this->branch),
-            escapeshellarg($this->repoUrl)
+            escapeshellarg($url)
         );
         return $cmd;
+    }
+    
+    /**
+     * 构建带认证信息的 URL
+     */
+    private function buildAuthenticatedUrl() {
+        // 如果 URL 中已经包含用户名，直接返回
+        if (preg_match('/^https?:\/\/[^@]+@/', $this->repoUrl)) {
+            return $this->repoUrl;
+        }
+        
+        // 如果提供了用户名和密码，且 URL 是 HTTPS，则将认证信息嵌入 URL
+        if ($this->gitUsername && $this->gitPassword && preg_match('/^https:\/\//', $this->repoUrl)) {
+            $urlParts = parse_url($this->repoUrl);
+            $scheme = isset($urlParts['scheme']) ? $urlParts['scheme'] : 'https';
+            $host = isset($urlParts['host']) ? $urlParts['host'] : '';
+            $port = isset($urlParts['port']) ? ':' . $urlParts['port'] : '';
+            $path = isset($urlParts['path']) ? $urlParts['path'] : '';
+            $query = isset($urlParts['query']) ? '?' . $urlParts['query'] : '';
+            $fragment = isset($urlParts['fragment']) ? '#' . $urlParts['fragment'] : '';
+            
+            return sprintf(
+                '%s://%s:%s@%s%s%s%s',
+                $scheme,
+                rawurlencode($this->gitUsername),
+                rawurlencode($this->gitPassword),
+                $host,
+                $port,
+                $path,
+                $query . $fragment
+            );
+        }
+        
+        return $this->repoUrl;
     }
     
     /**
      * 构建拉取命令
      */
     private function buildPullCommand() {
-        $cmd = sprintf(
+        $url = $this->buildAuthenticatedUrl();
+        // 如果提供了认证信息且 URL 已更改，先更新 remote URL
+        $commands = [];
+        if ($this->gitUsername && $this->gitPassword && preg_match('/^https:\/\//', $this->repoUrl)) {
+            $commands[] = sprintf(
+                "cd %s && git remote set-url origin %s",
+                escapeshellarg($this->deployPath),
+                escapeshellarg($url)
+            );
+        }
+        $commands[] = sprintf(
             "cd %s && git fetch origin && git checkout %s && git pull origin %s",
             escapeshellarg($this->deployPath),
             escapeshellarg($this->branch),
             escapeshellarg($this->branch)
         );
-        return $cmd;
+        return implode(' && ', $commands);
     }
     
     /**

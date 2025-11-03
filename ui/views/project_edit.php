@@ -31,6 +31,8 @@ require_once __DIR__ . '/../../lang/zh.php';
       <tbody>
         <tr><th><?php echo Lang::get('project_name'); ?></th><td><input type="text" name="name" value="<?php echo htmlspecialchars($project['name'] ?? ''); ?>" required></td></tr>
         <tr><th><?php echo Lang::get('repo_url'); ?></th><td><input type="text" name="repo_url" value="<?php echo htmlspecialchars($project['repo_url'] ?? ''); ?>" placeholder="https://github.com/user/repo.git" required></td></tr>
+        <tr><th>Git 用户名（可选）</th><td><input type="text" name="git_username" value="<?php echo htmlspecialchars($project['git_username'] ?? ''); ?>" placeholder="HTTPS 仓库认证用户名"></td></tr>
+        <tr><th>Git 密码（可选）</th><td><input type="password" name="git_password" value="" placeholder="<?php echo $project ? '留空保留原密码' : 'HTTPS 仓库认证密码'; ?>"><div class="note">HTTPS 私有仓库需要填写用户名和密码</div></td></tr>
         <tr><th><?php echo Lang::get('branch'); ?></th><td><input type="text" name="branch" value="<?php echo htmlspecialchars($project['branch'] ?? 'master'); ?>" required></td></tr>
         <tr><th><?php echo Lang::get('deploy_path'); ?></th><td><input type="text" name="deploy_path" value="<?php echo htmlspecialchars($project['deploy_path'] ?? ''); ?>" placeholder="/var/www/project" required></td></tr>
         <tr>

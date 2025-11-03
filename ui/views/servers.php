@@ -23,9 +23,14 @@ require_once __DIR__ . '/../../lang/zh.php';
       <a href="?action=logout" class="btn btn-danger"><?php echo Lang::get('logout'); ?></a>
     </td>
   </tr></table>
+
 </div></div>
 
 <div class="wrap">
+  <?php if (!empty($_SESSION['flash'])): $f=$_SESSION['flash']; unset($_SESSION['flash']); ?>
+    <div class="alert<?php echo ($f['type'] ?? '') === 'success' ? ' alert-success' : ''; ?>"><?php echo htmlspecialchars($f['message'] ?? ''); ?></div>
+  <?php endif; ?>
+
   <table>
     <thead>
       <tr>
@@ -55,6 +60,7 @@ require_once __DIR__ . '/../../lang/zh.php';
           <td><?php echo htmlspecialchars($server['port']); ?></td>
           <td><?php echo htmlspecialchars($server['username']); ?></td>
           <td>
+            <a href="?action=server_test&id=<?php echo $server['id']; ?>" class="btn btn-small">测试连接</a>
             <a href="?action=server_edit&id=<?php echo $server['id']; ?>" class="btn btn-small"><?php echo Lang::get('edit'); ?></a>
             <a href="?action=server_delete&id=<?php echo $server['id']; ?>" class="btn btn-small btn-danger" onclick="return confirmDelete('确定要删除此服务器吗？')"><?php echo Lang::get('delete'); ?></a>
           </td>

@@ -63,7 +63,8 @@ class Deployer {
                 'port' => $server['port'],
                 'username' => $server['username'],
                 'key_path' => $server['key_path'],
-                'key_content' => $server['key_content'] ?? null
+                'key_content' => $server['key_content'] ?? null,
+                'password' => $server['password'] ?? null
             ];
             
             $sshExecutor = new SSHExecutor($sshConfig);
@@ -73,7 +74,9 @@ class Deployer {
                 $sshExecutor,
                 $project['repo_url'],
                 $branch,
-                $project['deploy_path']
+                $project['deploy_path'],
+                $project['git_username'] ?? null,
+                $project['git_password'] ?? null
             );
             
             $output = [];
@@ -83,73 +86,80 @@ class Deployer {
             $output[] = "Path: {$project['deploy_path']}";
             $output[] = "";
             
-            // 执行部署前脚本
-            if (!empty($project['pre_deploy_script'])) {
-                $output[] = "=== Pre-deploy Script ===";
-                $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['pre_deploy_script']);
-                $output[] = "";
-            }
-            
-            // 执行 Git 部署
-            $output[] = "=== Git Operations ===";
-            $gitResult = $gitDeployer->deploy();
-            $output[] = $gitResult['output'];
-            $output[] = "";
-            
-            // 执行插件任务
-            $output[] = "=== Running Plugins ===";
-            foreach ($this->plugins as $plugin) {
-                if ($plugin->shouldRun($project)) {
-                    $output[] = "Running plugin: " . get_class($plugin);
-                    $pluginOutput = $plugin->execute($sshExecutor, $project);
-                    $output[] = $pluginOutput;
+            try {
+                // 执行部署前脚本
+                if (!empty($project['pre_deploy_script'])) {
+                    $output[] = "=== Pre-deploy Script ===";
+                    $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['pre_deploy_script']);
                     $output[] = "";
                 }
-            }
-            
-            // 执行部署后脚本
-            if (!empty($project['post_deploy_script'])) {
-                $output[] = "=== Post-deploy Script ===";
-                $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['post_deploy_script']);
+                
+                // 执行 Git 部署
+                $output[] = "=== Git Operations ===";
+                $gitResult = $gitDeployer->deploy();
+                $output[] = $gitResult['output'];
                 $output[] = "";
+                
+                // 执行插件任务
+                $output[] = "=== Running Plugins ===";
+                foreach ($this->plugins as $plugin) {
+                    if ($plugin->shouldRun($project)) {
+                        $output[] = "Running plugin: " . get_class($plugin);
+                        $pluginOutput = $plugin->execute($sshExecutor, $project);
+                        $output[] = $pluginOutput;
+                        $output[] = "";
+                    }
+                }
+                
+                // 执行部署后脚本
+                if (!empty($project['post_deploy_script'])) {
+                    $output[] = "=== Post-deploy Script ===";
+                    $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['post_deploy_script']);
+                    $output[] = "";
+                }
+                
+                $output[] = "=== Deployment Completed ===";
+                
+                // 更新部署记录
+                $this->db->update('deployments', [
+                    'status' => 'success',
+                    'commit_hash' => $gitResult['commit_hash'],
+                    'commit_message' => $gitResult['commit_message'],
+                    'output' => implode("\n", $output),
+                    'finished_at' => date('Y-m-d H:i:s')
+                ], 'id = ?', [$deploymentId]);
+                
+                Logger::info("Deployment completed successfully: project_id={$projectId}");
+                
+                return [
+                    'success' => true,
+                    'deployment_id' => $deploymentId,
+                    'output' => implode("\n", $output)
+                ];
+                
+            } catch (Exception $e) {
+                $error = $e->getMessage();
+                $output[] = "";
+                $output[] = "=== Deployment Failed ===";
+                $output[] = "Error: {$error}";
+                
+                Logger::error("Deployment failed: {$error}");
+                
+                // 更新部署记录为失败，同时保存输出日志
+                $this->db->update('deployments', [
+                    'status' => 'failed',
+                    'error' => $error,
+                    'output' => implode("\n", $output),
+                    'finished_at' => date('Y-m-d H:i:s')
+                ], 'id = ?', [$deploymentId]);
+                
+                return [
+                    'success' => false,
+                    'deployment_id' => $deploymentId,
+                    'error' => $error,
+                    'output' => implode("\n", $output)
+                ];
             }
-            
-            $output[] = "=== Deployment Completed ===";
-            
-            // 更新部署记录
-            $this->db->update('deployments', [
-                'status' => 'success',
-                'commit_hash' => $gitResult['commit_hash'],
-                'commit_message' => $gitResult['commit_message'],
-                'output' => implode("\n", $output),
-                'finished_at' => date('Y-m-d H:i:s')
-            ], 'id = ?', [$deploymentId]);
-            
-            Logger::info("Deployment completed successfully: project_id={$projectId}");
-            
-            return [
-                'success' => true,
-                'deployment_id' => $deploymentId,
-                'output' => implode("\n", $output)
-            ];
-            
-        } catch (Exception $e) {
-            $error = $e->getMessage();
-            Logger::error("Deployment failed: {$error}");
-            
-            // 更新部署记录为失败
-            $this->db->update('deployments', [
-                'status' => 'failed',
-                'error' => $error,
-                'finished_at' => date('Y-m-d H:i:s')
-            ], 'id = ?', [$deploymentId]);
-            
-            return [
-                'success' => false,
-                'deployment_id' => $deploymentId,
-                'error' => $error
-            ];
-        }
     }
     
     /**
@@ -191,7 +201,8 @@ class Deployer {
             'port' => $server['port'],
             'username' => $server['username'],
             'key_path' => $server['key_path'],
-            'key_content' => $server['key_content'] ?? null
+            'key_content' => $server['key_content'] ?? null,
+            'password' => $server['password'] ?? null
         ];
         
         $sshExecutor = new SSHExecutor($sshConfig);
