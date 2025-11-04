@@ -48,12 +48,9 @@ class Compiler {
     public function compile() {
         echo "开始编译（优化模式）...\n";
         
-        // 初始化输出内容
+        // 初始化输出内容（压缩后合并为一行）
         $this->output = "<?php\n";
-        $this->output .= "error_reporting(E_ALL);\n";
-        $this->output .= "ini_set('display_errors', 1);\n";
-        $this->output .= "ini_set('display_startup_errors', 1);\n";
-        $this->output .= "date_default_timezone_set('Asia/Shanghai');\n\n";
+        $this->output .= "error_reporting(E_ALL);ini_set('display_errors',1);ini_set('display_startup_errors',1);date_default_timezone_set('Asia/Shanghai');\n";
         
         // 处理核心文件
         foreach ($this->files as $file) {
@@ -71,8 +68,9 @@ class Compiler {
             
             // 处理文件内容
             $content = $this->processFile($content, $file);
-            $this->output .= "\n/* --- 文件: " . $file . " --- */\n";
-            $this->output .= $content . "\n";
+            // 移除文件分隔注释以减小体积
+            // $this->output .= "\n/* --- 文件: " . $file . " --- */\n";
+            $this->output .= "\n" . $content . "\n";
         }
         
         // 处理视图文件并创建 ViewRenderer
@@ -83,6 +81,9 @@ class Compiler {
         
         // 添加主入口
         $this->output .= $this->buildMainEntry();
+        
+        // 移除文件分隔注释（这些注释在压缩后不需要）
+        $this->output = preg_replace('/\/\*[\s\S]*?---[\s\S]*?\*\/\s*/', '', $this->output);
         
         // 代码清理和压缩
         $this->output = $this->cleanCode($this->output);
@@ -352,9 +353,9 @@ class Compiler {
             $routerContent
         );
         
-        $this->output .= "\n/* --- Router.php --- */\n";
-        $this->output .= $routerContent;
-        $this->output .= "\n\n";
+        // 移除文件分隔注释以减小体积
+        // $this->output .= "\n/* --- Router.php --- */\n";
+        $this->output .= "\n" . $routerContent . "\n\n";
     }
     
     /**
@@ -383,10 +384,10 @@ class Compiler {
     }
     
     /**
-     * PHP 代码压缩（极简模式，只移除注释和多余空行）
+     * PHP 代码压缩（优化模式，安全压缩）
      */
     private function minifyPHP($content) {
-        echo "压缩代码（极简模式）...\n";
+        echo "压缩代码（优化模式）...\n";
         
         if (empty($content)) {
             echo "警告: 内容为空，跳过压缩\n";
@@ -395,18 +396,161 @@ class Compiler {
         
         $originalLength = strlen($content);
         
-        // 只移除真正的多行注释（/* ... */），但要小心字符串中的 /*
-        // 使用更保守的方式：只移除以 /* 开头且不在引号内的注释
-        // 简单处理：移除行首的多行注释块
+        // 使用状态机安全地处理字符串和注释
+        $result = '';
+        $inString = false;
+        $stringChar = '';
+        $inComment = false;
+        $commentType = ''; // 'single' 或 'multi'
+        $inRegex = false;
+        $len = strlen($content);
+        $i = 0;
         
-        // 先移除以 /* 开头的多行注释（通常是文档注释）
-        // 使用非贪婪匹配，并确保不会匹配到字符串中的内容
-        // 最简单的方式：只移除真正的注释块，不处理字符串
+        while ($i < $len) {
+            $char = $content[$i];
+            $nextChar = ($i + 1 < $len) ? $content[$i + 1] : '';
+            
+            // 处理字符串
+            if (!$inComment && !$inRegex) {
+                // 检查字符串开始
+                if (($char === '"' || $char === "'") && ($i === 0 || $content[$i - 1] !== '\\')) {
+                    if (!$inString) {
+                        $inString = true;
+                        $stringChar = $char;
+                        $result .= $char;
+                        $i++;
+                        continue;
+                    } elseif ($char === $stringChar) {
+                        // 字符串结束
+                        $inString = false;
+                        $stringChar = '';
+                        $result .= $char;
+                        $i++;
+                        continue;
+                    }
+                }
+                
+                // 在字符串内，直接添加字符
+                if ($inString) {
+                    $result .= $char;
+                    $i++;
+                    continue;
+                }
+            }
+            
+            // 检查正则表达式（简化处理：/pattern/flags 格式）
+            if (!$inString && !$inComment && ($char === '/' && $nextChar !== '/' && $nextChar !== '*')) {
+                // 可能是正则表达式开始
+                $prevChar = ($i > 0) ? $content[$i - 1] : '';
+                if (in_array($prevChar, ['=', '(', '[', ',', ':', '!', '&', '|', '?', '{', '}', ';', ' '])) {
+                    $inRegex = true;
+                    $result .= $char;
+                    $i++;
+                    continue;
+                }
+            }
+            
+            if ($inRegex) {
+                $result .= $char;
+                // 检查正则表达式结束（简化：遇到 / 后跟可选标志字符）
+                if ($char === '/' && $i > 0 && $content[$i - 1] !== '\\') {
+                    $afterSlash = '';
+                    $j = $i + 1;
+                    while ($j < $len && preg_match('/[gimsxADSUXJu]/', $content[$j])) {
+                        $afterSlash .= $content[$j];
+                        $j++;
+                    }
+                    // 如果后面是标志字符或结束符，则正则表达式结束
+                    if ($afterSlash !== '' || in_array($content[$j] ?? '', [';', ')', ']', ',', '}', ' ', "\n", "\t"])) {
+                        $result .= $afterSlash;
+                        $i = $j;
+                        $inRegex = false;
+                        continue;
+                    }
+                }
+                $i++;
+                continue;
+            }
+            
+            // 检查注释开始
+            if (!$inString && !$inComment && $char === '/') {
+                if ($nextChar === '/') {
+                    // 单行注释开始
+                    $inComment = true;
+                    $commentType = 'single';
+                    $i += 2;
+                    continue;
+                } elseif ($nextChar === '*') {
+                    // 多行注释开始
+                    $inComment = true;
+                    $commentType = 'multi';
+                    $i += 2;
+                    continue;
+                }
+            }
+            
+            // 处理注释
+            if ($inComment) {
+                if ($commentType === 'single') {
+                    // 单行注释：遇到换行符结束
+                    if ($char === "\n") {
+                        $inComment = false;
+                        $commentType = '';
+                        $result .= "\n"; // 保留换行符
+                    }
+                } elseif ($commentType === 'multi') {
+                    // 多行注释：遇到 */ 结束
+                    if ($char === '*' && $nextChar === '/') {
+                        $inComment = false;
+                        $commentType = '';
+                        $i += 2;
+                        continue;
+                    }
+                }
+                $i++;
+                continue;
+            }
+            
+            // 普通字符
+            $result .= $char;
+            $i++;
+        }
+        
+        // 移除行首行尾空白
+        $lines = explode("\n", $result);
+        $cleanedLines = [];
+        foreach ($lines as $line) {
+            $line = ltrim($line);
+            $line = rtrim($line);
+            $cleanedLines[] = $line;
+        }
+        $result = implode("\n", $cleanedLines);
         
         // 移除多个连续空行（保留最多一个空行）
-        $content = preg_replace('/\n{3,}/', "\n\n", $content);
+        $result = preg_replace('/\n{3,}/', "\n\n", $result);
         
-        $finalLength = strlen($content);
+        // 更激进的空格压缩（参考 Adminer，但更保守）
+        // 移除分号前后的空格
+        $result = preg_replace('/\s*;\s*/', ';', $result);
+        // 移除逗号后的空格
+        $result = preg_replace('/,\s+/', ',', $result);
+        // 移除花括号前后的空格（但要小心）
+        $result = preg_replace('/\s*\{\s*/', '{', $result);
+        $result = preg_replace('/\s*\}\s*/', '}', $result);
+        // 移除括号前后的空格
+        $result = preg_replace('/\s*\(\s*/', '(', $result);
+        $result = preg_replace('/\s*\)\s*/', ')', $result);
+        // 移除方括号前后的空格
+        $result = preg_replace('/\s*\[\s*/', '[', $result);
+        $result = preg_replace('/\s*\]\s*/', ']', $result);
+        
+        // 移除多个连续空行（保留最多一个空行）
+        $result = preg_replace('/\n{3,}/', "\n\n", $result);
+        
+        // 移除行首的空行
+        $result = preg_replace('/^\n+/', '', $result);
+        
+        $finalLength = strlen($result);
         if ($finalLength === 0) {
             echo "错误: 压缩后内容为空！\n";
             return '';
@@ -414,9 +558,9 @@ class Compiler {
         
         echo "压缩前: " . number_format($originalLength) . " bytes\n";
         echo "压缩后: " . number_format($finalLength) . " bytes\n";
-        echo "注意: 已跳过多行注释移除，避免破坏字符串中的 /* */\n";
+        echo "压缩率: " . number_format((1 - $finalLength / $originalLength) * 100, 1) . "%\n";
         
-        return $content;
+        return $result;
     }
     
     /**
