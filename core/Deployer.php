@@ -177,13 +177,22 @@ class Deployer {
                     $output[] = "注意：对于 HTTPS 私有仓库，必须填写用户名和密码/访问令牌";
                 }
                 
-                // 添加详细的错误堆栈信息（用于调试）
-                $output[] = "";
-                $output[] = "Error Details:";
-                $output[] = "File: " . $e->getFile();
-                $output[] = "Line: " . $e->getLine();
-                $output[] = "Trace:";
-                $output[] = $e->getTraceAsString();
+                // 只在开发环境显示详细错误信息（生产环境隐藏）
+                $isDevelopment = getenv('APP_ENV') === 'development' 
+                    || ini_get('display_errors') 
+                    || (defined('APP_DEBUG') && APP_DEBUG);
+                
+                if ($isDevelopment) {
+                    $output[] = "";
+                    $output[] = "Error Details:";
+                    $output[] = "File: " . $e->getFile();
+                    $output[] = "Line: " . $e->getLine();
+                    $output[] = "Trace:";
+                    $output[] = $e->getTraceAsString();
+                } else {
+                    $output[] = "";
+                    $output[] = "提示: 详细错误信息已记录到日志文件，请联系管理员查看";
+                }
                 
                 Logger::error("Deployment failed: {$error}");
                 Logger::error("Deployment error details: " . $e->getFile() . ":" . $e->getLine() . "\n" . $e->getTraceAsString());
@@ -203,8 +212,18 @@ class Deployer {
             $error = $e->getMessage();
             Logger::error("Deployment initialization failed: {$error}");
             
+            // 只在开发环境显示详细错误信息
+            $isDevelopment = getenv('APP_ENV') === 'development' 
+                || ini_get('display_errors') 
+                || (defined('APP_DEBUG') && APP_DEBUG);
+            
+            $errorOutput = "=== Deployment Initialization Failed ===\nError: {$error}";
+            if ($isDevelopment) {
+                $errorOutput .= "\nFile: " . $e->getFile() . "\nLine: " . $e->getLine();
+            }
+            
             // 确保更新部署记录为失败
-            $this->updateDeploymentStatus($deploymentId, 'failed', $error, "=== Deployment Initialization Failed ===\nError: {$error}");
+            $this->updateDeploymentStatus($deploymentId, 'failed', $error, $errorOutput);
             
             return [
                 'success' => false,
@@ -262,9 +281,88 @@ class Deployer {
     }
     
     /**
+     * 验证脚本内容的安全性
+     * 
+     * @param string $script 脚本内容
+     * @throws InvalidArgumentException 如果脚本包含危险命令
+     */
+    private function validateScript($script) {
+        if (empty($script)) {
+            return;
+        }
+        
+        // 危险命令模式（禁止执行）
+        $dangerousPatterns = [
+            // 删除命令
+            '/\brm\s+(-rf|-r|-f)\s+/i',
+            '/\brmdir\s+/i',
+            '/\bdel\s+/i',
+            // 格式化命令
+            '/\bformat\s+/i',
+            '/\bmkfs\s+/i',
+            // 磁盘操作
+            '/\bdd\s+if=/i',
+            '/\bdd\s+of=/i',
+            // 系统命令
+            '/\bshutdown\s+/i',
+            '/\breboot\s+/i',
+            '/\bhalt\s+/i',
+            '/\bpoweroff\s+/i',
+            // 危险重定向
+            '/>\s*\/dev\/(sd[a-z]|hd[a-z]|nvme)/i',
+            '/>\s*\/dev\/null\s*&&\s*rm/i',
+            // 修改系统文件
+            '/\s+\/etc\/(passwd|shadow|hosts)/i',
+            '/\s+\/proc\//i',
+            '/\s+\/sys\//i',
+            // 网络危险操作
+            '/\bwget\s+.*\|\s*sh/i',
+            '/\bcurl\s+.*\|\s*sh/i',
+            // 命令注入尝试
+            '/;\s*rm\s+/i',
+            '/\|\s*rm\s+/i',
+            '/&&\s*rm\s+/i',
+            '/`.*rm.*`/i',
+            '/\$\{.*rm.*\}/i',
+        ];
+        
+        // 按行检查脚本
+        $scriptLines = explode("\n", $script);
+        foreach ($scriptLines as $lineNum => $line) {
+            $line = trim($line);
+            
+            // 跳过空行和注释
+            if (empty($line) || strpos($line, '#') === 0) {
+                continue;
+            }
+            
+            // 检查危险模式
+            foreach ($dangerousPatterns as $pattern) {
+                if (preg_match($pattern, $line)) {
+                    Logger::warning("Dangerous command detected in script at line " . ($lineNum + 1) . ": " . substr($line, 0, 50));
+                    throw new InvalidArgumentException("脚本包含危险命令，不允许执行。检测到第 " . ($lineNum + 1) . " 行存在安全问题。");
+                }
+            }
+        }
+        
+        // 检查脚本长度（防止过长的脚本）
+        if (strlen($script) > 10000) {
+            throw new InvalidArgumentException("脚本内容过长（超过 10000 字符），可能存在安全风险");
+        }
+    }
+    
+    /**
      * 执行脚本
      */
     private function executeScript($sshExecutor, $deployPath, $script) {
+        // 先验证脚本安全性
+        try {
+            $this->validateScript($script);
+        } catch (InvalidArgumentException $e) {
+            Logger::error("Script validation failed: " . $e->getMessage());
+            throw $e;
+        }
+        
         $command = sprintf(
             "cd %s && %s",
             escapeshellarg($deployPath),

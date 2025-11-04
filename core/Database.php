@@ -38,8 +38,22 @@ class Database {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
+            is_default_password INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )");
+        
+        // 兼容已有表，增加 is_default_password 字段
+        $cols = $this->db->query("PRAGMA table_info(users)")->fetchAll();
+        $hasDefaultPasswordFlag = false;
+        foreach ($cols as $col) {
+            if (($col['name'] ?? '') === 'is_default_password') {
+                $hasDefaultPasswordFlag = true;
+                break;
+            }
+        }
+        if (!$hasDefaultPasswordFlag) {
+            $this->db->exec("ALTER TABLE users ADD COLUMN is_default_password INTEGER DEFAULT 0");
+        }
         
         // 服务器表
         $this->db->exec("CREATE TABLE IF NOT EXISTS servers (
@@ -119,8 +133,17 @@ class Database {
         $stmt->execute(['admin']);
         if ($stmt->fetchColumn() == 0) {
             $password = password_hash('admin', PASSWORD_DEFAULT);
-            $stmt = $this->db->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
+            $stmt = $this->db->prepare("INSERT INTO users (username, password, is_default_password) VALUES (?, ?, 1)");
             $stmt->execute(['admin', $password]);
+        } else {
+            // 检查现有 admin 用户是否使用默认密码（兼容旧数据）
+            $user = $this->db->fetchOne("SELECT id, password, is_default_password FROM users WHERE username = ?", ['admin']);
+            if ($user && ($user['is_default_password'] ?? 0) == 0) {
+                // 验证密码是否为默认密码
+                if (password_verify('admin', $user['password'])) {
+                    $this->db->update('users', ['is_default_password' => 1], 'id = ?', [$user['id']]);
+                }
+            }
         }
     }
     

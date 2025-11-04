@@ -43,12 +43,57 @@ class Auth {
         if ($user && password_verify($password, $user['password'])) {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['username'] = $user['username'];
+            $_SESSION['is_default_password'] = ($user['is_default_password'] ?? 0) == 1;
+            
             Logger::info("User {$username} logged in");
             return true;
         }
         
         Logger::warning("Failed login attempt for username: {$username}");
         return false;
+    }
+    
+    /**
+     * 检查是否使用默认密码
+     */
+    public function isDefaultPassword() {
+        if (!$this->isLoggedIn()) {
+            return false;
+        }
+        return $_SESSION['is_default_password'] ?? false;
+    }
+    
+    /**
+     * 修改密码
+     */
+    public function changePassword($userId, $oldPassword, $newPassword) {
+        // 验证旧密码
+        $user = $this->db->fetchOne("SELECT * FROM users WHERE id = ?", [$userId]);
+        if (!$user || !password_verify($oldPassword, $user['password'])) {
+            throw new InvalidArgumentException("旧密码不正确");
+        }
+        
+        // 验证新密码
+        if (empty($newPassword)) {
+            throw new InvalidArgumentException("新密码不能为空");
+        }
+        
+        if (strlen($newPassword) < 8) {
+            throw new InvalidArgumentException("新密码长度至少需要 8 个字符");
+        }
+        
+        // 更新密码
+        $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+        $this->db->update('users', [
+            'password' => $hashedPassword,
+            'is_default_password' => 0
+        ], 'id = ?', [$userId]);
+        
+        // 更新 session
+        $_SESSION['is_default_password'] = false;
+        
+        Logger::info("User {$user['username']} changed password");
+        return true;
     }
     
     public function logout() {

@@ -20,6 +20,12 @@ class Router {
             $this->auth->requireLogin();
         }
         
+        // 如果使用默认密码，只能访问修改密码页面和退出登录
+        if ($this->auth->isLoggedIn() && $this->auth->isDefaultPassword() && $action !== 'change_password' && $action !== 'logout') {
+            header('Location: ?action=change_password&required=1');
+            exit;
+        }
+        
         switch ($action) {
             case 'login':
                 $this->handleLogin();
@@ -63,6 +69,9 @@ class Router {
             case 'api':
                 $this->handleApi();
                 break;
+            case 'change_password':
+                $this->handleChangePassword();
+                break;
             default:
                 $this->handleDashboard();
         }
@@ -87,6 +96,13 @@ class Router {
                     if ($this->auth->login($username, $password)) {
                         Logger::info("Login successful: username={$username}");
                         CSRF::regenerateToken(); // 登录成功后重新生成 token
+                        
+                        // 检查是否使用默认密码，如果是则跳转到修改密码页面
+                        if ($this->auth->isDefaultPassword()) {
+                            header('Location: ?action=change_password&required=1');
+                            exit;
+                        }
+                        
                         header('Location: ?action=dashboard');
                         exit;
                     } else {
@@ -111,6 +127,12 @@ class Router {
     }
     
     private function handleDashboard() {
+        // 检查是否使用默认密码，如果是则强制跳转到修改密码页面
+        if ($this->auth->isDefaultPassword()) {
+            header('Location: ?action=change_password&required=1');
+            exit;
+        }
+        
         $db = Database::getInstance();
         $projects = $db->fetchAll("SELECT * FROM projects ORDER BY id DESC LIMIT 10");
         $recentDeployments = $db->fetchAll("
@@ -663,6 +685,109 @@ class Router {
         $this->renderJson(['status' => 'ok']);
     }
     
+    private function handleChangePassword() {
+        // 需要登录才能修改密码
+        $this->auth->requireLogin();
+        
+        $error = null;
+        $success = false;
+        $required = isset($_GET['required']) && $_GET['required'] == '1';
+        
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            // 验证 CSRF Token
+            if (!CSRF::validate()) {
+                Logger::warning("CSRF validation failed on change password");
+                $error = '安全验证失败，请重新提交';
+            } else {
+                try {
+                    $oldPassword = $_POST['old_password'] ?? '';
+                    $newPassword = $_POST['new_password'] ?? '';
+                    $confirmPassword = $_POST['confirm_password'] ?? '';
+                    
+                    // 验证必填字段
+                    if (empty($oldPassword)) {
+                        throw new InvalidArgumentException("旧密码不能为空");
+                    }
+                    if (empty($newPassword)) {
+                        throw new InvalidArgumentException("新密码不能为空");
+                    }
+                    if (empty($confirmPassword)) {
+                        throw new InvalidArgumentException("确认密码不能为空");
+                    }
+                    
+                    // 验证新密码和确认密码是否一致
+                    if ($newPassword !== $confirmPassword) {
+                        throw new InvalidArgumentException("新密码和确认密码不一致");
+                    }
+                    
+                    // 验证新密码长度
+                    if (strlen($newPassword) < 8) {
+                        throw new InvalidArgumentException("新密码长度至少需要 8 个字符");
+                    }
+                    
+                    // 如果使用默认密码，允许使用旧密码 'admin' 或当前密码
+                    $userId = $this->auth->getUserId();
+                    if ($this->auth->isDefaultPassword()) {
+                        // 对于默认密码用户，检查旧密码是否为 'admin'
+                        if ($oldPassword !== 'admin') {
+                            // 如果不是 'admin'，则验证当前密码
+                            $user = Database::getInstance()->fetchOne("SELECT * FROM users WHERE id = ?", [$userId]);
+                            if (!$user || !password_verify($oldPassword, $user['password'])) {
+                                throw new InvalidArgumentException("旧密码不正确");
+                            }
+                        }
+                        
+                        // 验证新密码不是默认密码
+                        if ($newPassword === 'admin') {
+                            throw new InvalidArgumentException("新密码不能使用默认密码");
+                        }
+                        
+                        // 直接更新密码（跳过旧密码验证，因为已经验证了）
+                        $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+                        Database::getInstance()->update('users', [
+                            'password' => $hashedPassword,
+                            'is_default_password' => 0
+                        ], 'id = ?', [$userId]);
+                        
+                        // 更新 session
+                        $_SESSION['is_default_password'] = false;
+                        
+                        Logger::info("Password changed successfully for user ID: {$userId} (default password user)");
+                        CSRF::regenerateToken();
+                        
+                        // 如果是强制修改，跳转到仪表板
+                        if ($required) {
+                            $_SESSION['flash'] = ['type' => 'success', 'message' => '密码修改成功！'];
+                            header('Location: ?action=dashboard');
+                            exit;
+                        }
+                        
+                        $success = true;
+                        $error = null;
+                    } else {
+                        // 修改密码（非默认密码用户）
+                        $this->auth->changePassword($userId, $oldPassword, $newPassword);
+                        
+                        Logger::info("Password changed successfully for user ID: {$userId}");
+                        CSRF::regenerateToken();
+                        
+                        $success = true;
+                        $error = null;
+                    }
+                    
+                } catch (InvalidArgumentException $e) {
+                    Logger::warning("Change password validation failed: " . $e->getMessage());
+                    $error = $e->getMessage();
+                } catch (Exception $e) {
+                    Logger::error("Change password failed: " . $e->getMessage());
+                    $error = '修改密码失败: ' . $e->getMessage();
+                }
+            }
+        }
+        
+        $this->renderChangePassword($error, $success, $required);
+    }
+    
     private function handleApi() {
         $endpoint = $_GET['endpoint'] ?? '';
         
@@ -781,6 +906,15 @@ class Router {
             include $viewPath;
         } else {
             echo "View file not found: server_edit.php";
+        }
+    }
+    
+    private function renderChangePassword($error = null, $success = false, $required = false) {
+        $viewPath = __DIR__ . '/../ui/views/change_password.php';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: change_password.php";
         }
     }
     
