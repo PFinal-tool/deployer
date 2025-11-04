@@ -1,6 +1,7 @@
 <?php
 /**
- * 打包脚本 - 将所有模块合并成单文件（极致压缩版）
+ * 打包脚本 - 将所有模块合并成单文件（优化版）
+ * 参考 Adminer 的编译思路，优化代码压缩和资源处理
  */
 
 class Compiler {
@@ -8,6 +9,7 @@ class Compiler {
     private $views = [];
     private $output = '';
     private $outputFile = 'deployer-single.php';
+    private $minify = true; // 是否压缩代码
     
     public function __construct() {
         $this->files = [
@@ -37,10 +39,18 @@ class Compiler {
         ];
     }
     
+    /**
+     * 主编译方法
+     */
     public function compile() {
-        echo "开始编译（极致压缩模式）...\n";
+        echo "开始编译（优化模式）...\n";
         
-        $this->output = "<?php\nerror_reporting(E_ALL);ini_set('display_errors',1);ini_set('display_startup_errors',1);date_default_timezone_set('Asia/Shanghai');\n";
+        // 初始化输出内容
+        $this->output = "<?php\n";
+        $this->output .= "error_reporting(E_ALL);\n";
+        $this->output .= "ini_set('display_errors', 1);\n";
+        $this->output .= "ini_set('display_startup_errors', 1);\n";
+        $this->output .= "date_default_timezone_set('Asia/Shanghai');\n\n";
         
         // 处理核心文件
         foreach ($this->files as $file) {
@@ -51,6 +61,46 @@ class Compiler {
             }
             echo "处理: " . $file . "\n";
             $content = file_get_contents($fullPath);
+            if ($content === false) {
+                echo "警告: 无法读取文件: " . $file . "\n";
+                continue;
+            }
+            
+            // 处理文件内容
+            $content = $this->processFile($content, $file);
+            $this->output .= "\n/* --- 文件: " . $file . " --- */\n";
+            $this->output .= $content . "\n";
+        }
+        
+        // 处理视图文件并创建 ViewRenderer
+        $this->output .= $this->buildViewRenderer();
+        
+        // 处理 Router 类
+        $this->processRouter();
+        
+        // 添加主入口
+        $this->output .= $this->buildMainEntry();
+        
+        // 代码清理和压缩
+        $this->output = $this->cleanCode($this->output);
+        
+        if ($this->minify) {
+            $this->output = $this->minifyPHP($this->output);
+        }
+        
+        // 写入文件
+        file_put_contents(__DIR__ . '/' . $this->outputFile, $this->output);
+        
+        $size = filesize(__DIR__ . '/' . $this->outputFile);
+        echo "\n编译完成: " . $this->outputFile . "\n";
+        echo "文件大小: " . number_format($size / 1024, 2) . " KB\n";
+    }
+    
+    /**
+     * 处理单个文件
+     */
+    private function processFile($content, $file) {
+            // 移除PHP标签
             $content = preg_replace('/^<\?php\s*/', '', $content);
             $content = preg_replace('/\?>\s*$/', '', $content);
             
@@ -61,230 +111,286 @@ class Compiler {
             if ($file === 'core/Database.php') {
                 $content = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage\/deployer\.db'/", "__DIR__ . '/storage/deployer.db'", $content);
             }
-            if ($file === 'core/Router.php') {
-                $content = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage'/", "__DIR__ . '/storage'", $content);
-            }
-            
-            $content = $this->minifyCode($content);
-            // 不输出文件标记注释，直接追加内容
-            $this->output .= $content . "\n";
+        if ($file === 'ui/css.php') {
+            // CSS 已经内联，保持原样
+        }
+        if ($file === 'ui/js.php') {
+            // JS 已经内联，保持原样
         }
         
-        // 处理视图文件并创建 ViewRenderer
-        $this->output .= 'class ViewRenderer{' . "\n";
-        $this->output .= 'private static $views=[];' . "\n";
-        $this->output .= 'public static function init(){' . "\n";
-        $this->output .= 'if(!empty(self::$views))return;' . "\n";
+        return $content;
+    }
+    
+    /**
+     * 构建 ViewRenderer 类
+     */
+    private function buildViewRenderer() {
+        $output = 'class ViewRenderer{' . "\n";
+        $output .= 'private static $views=[];' . "\n";
+        $output .= 'public static function init(){' . "\n";
+        $output .= 'if(!empty(self::$views))return;' . "\n";
         
         foreach ($this->views as $view) {
             $viewPath = __DIR__ . '/ui/views/' . $view;
             if (file_exists($viewPath)) {
                 echo "处理视图: " . $view . "\n";
                 $viewContent = file_get_contents($viewPath);
-                // 移除 PHP 开始标签（仅在文件开头）
-                $viewContent = preg_replace('/^<\?php\s*/', '', $viewContent);
                 
-                // 移除文件开头的 php 标签（如果有）
-                $viewContent = preg_replace('/^\?>\s*/', '', $viewContent);
-                
-                // 移除 require_once 语句（单文件中类已内嵌）
-                // 匹配多行 require_once（支持换行），使用更精确的模式
-                $viewContent = preg_replace('/require_once\s+[^;]*;/s', '', $viewContent);
-                $viewContent = preg_replace('/require\s+[^;]*;/s', '', $viewContent);
-                $viewContent = preg_replace('/include_once\s+[^;]*;/s', '', $viewContent);
-                $viewContent = preg_replace('/include\s+[^;]*;/s', '', $viewContent);
-                
-                // 移除不必要的变量赋值（如 $auth = new Auth();）
-                // 使用双引号字符串并正确转义
-                $pattern = '/\$auth\s*=\s*new\s+Auth\(\);\s*/s';
-                $viewContent = preg_replace($pattern, '', $viewContent);
-                
-                // 只移除文件末尾的 PHP 结束标签（保留中间的，因为它们在 eval 中需要）
-                // eval 会先输出结束标签，然后执行后面的内容
-                // 所以视图中的 PHP 标签需要保留结束标签
-                $viewContent = preg_replace('/\?>\s*$/', '', $viewContent);
-                
-                // 移除 HTML 注释
-                $viewContent = preg_replace('/<!--[\s\S]*?-->/', '', $viewContent);
-                
-                // 移除连续的空行
-                $viewContent = preg_replace('/\n\s*\n+/', "\n", $viewContent);
-                $viewContent = trim($viewContent);
+                // 清理视图内容
+                $viewContent = $this->cleanView($viewContent);
                 
                 // 使用 base64 编码避免转义问题
                 $viewContent = base64_encode($viewContent);
                 $viewName = basename($view, '.php');
-                // base64 编码后的字符串不需要转义，使用单引号避免转义问题
-                $this->output .= 'self::$views[\'' . $viewName . '\']=base64_decode(\'' . $viewContent . '\');' . "\n";
+                $output .= 'self::$views[\'' . $viewName . '\']=base64_decode(\'' . $viewContent . '\');' . "\n";
             }
         }
         
-        $this->output .= "}\n";
-        $this->output .= 'public static function render($view,$vars=[]){' . "\n";
-        $this->output .= 'self::init();' . "\n";
-        $this->output .= "if(!isset(self::\$views[\$view])){echo'View not found:'.\$view;return;}\n";
-        $this->output .= 'extract($vars,EXTR_SKIP);' . "\n";
-        $this->output .= "\$viewContent=self::\$views[\$view];ob_start();eval('?>'.(\$viewContent[0]==='<'?\$viewContent:'<?php '.\$viewContent));\$output=ob_get_clean();\$output=preg_replace('/^\\?>\\s*/','',\$output);echo\$output;\n";
-        $this->output .= "}\n";
-        $this->output .= "}\n\n";
+        $output .= "}\n";
+        $output .= 'public static function render($view,$vars=[]){' . "\n";
+        $output .= 'self::init();' . "\n";
+        $output .= "if(!isset(self::\$views[\$view])){echo'View not found:'.\$view;return;}\n";
+        $output .= 'extract($vars,EXTR_SKIP);' . "\n";
+        $output .= "\$viewContent=self::\$views[\$view];ob_start();eval('?>'.(\$viewContent[0]==='<'?\$viewContent:'<?php '.\$viewContent));\$output=ob_get_clean();\$output=preg_replace('/^\\?>\\s*/','',\$output);echo\$output;\n";
+        $output .= "}\n";
+        $output .= "}\n\n";
         
-        // 处理 Router 类并替换渲染方法
-        $routerPath = __DIR__ . '/core/Router.php';
-        $routerContent = file_get_contents($routerPath);
-        $routerContent = preg_replace('/^<\?php\s*/', '', $routerContent);
-        $routerContent = preg_replace('/\?>\s*$/', '', $routerContent);
-        
-        // 替换渲染方法（匹配完整的方法体，包括嵌套花括号）
-        $patterns = [
-            '/private function renderLogin\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderLogin($error=null){ViewRenderer::render(\'login\',[\'error\'=>$error]);}',
-            '/private function renderDashboard\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDashboard($projects,$deployments,$envCheck=[]){ViewRenderer::render(\'dashboard\',[\'projects\'=>$projects,\'deployments\'=>$deployments,\'envCheck\'=>$envCheck]);}',
-            '/private function renderProjects\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjects($projects){ViewRenderer::render(\'projects\',[\'projects\'=>$projects]);}',
-            '/private function renderProjectEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderProjectEdit($project,$servers){ViewRenderer::render(\'project_edit\',[\'project\'=>$project,\'servers\'=>$servers]);}',
-            '/private function renderServers\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderServers($servers){ViewRenderer::render(\'servers\',[\'servers\'=>$servers]);}',
-            '/private function renderServerEdit\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderServerEdit($server){ViewRenderer::render(\'server_edit\',[\'server\'=>$server]);}',
-            '/private function renderDeployments\([^)]*\)\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/s' => 'private function renderDeployments($deployments){ViewRenderer::render(\'deployments\',[\'deployments\'=>$deployments]);}',
-        ];
-        
-        foreach ($patterns as $pattern => $replacement) {
-            $routerContent = preg_replace($pattern, $replacement, $routerContent);
-        }
-        
-        $routerContent = $this->minifyCode($routerContent);
-        $this->output .= $routerContent . "\n";
-        
-        // 添加主入口（添加错误处理，默认显示错误）
-        $this->output .= 'if(php_sapi_name()!==\'cli\'){try{Logger::init();Database::getInstance();$router=new Router();$router->handle();}catch(Throwable $e){error_log(\'Deployer Error: \' . $e->getMessage() . \' in \' . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString());if(!headers_sent()){header(\'Content-Type: text/html; charset=UTF-8\');}echo \'<h1>Error</h1><pre>\' . htmlspecialchars($e->getMessage() . PHP_EOL . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString()) . \'</pre>\';exit;}}' . "\n";
-        
-        // 最终压缩
-        $this->output = $this->minifyCode($this->output);
-        
-        file_put_contents(__DIR__ . '/' . $this->outputFile, $this->output);
-        
-        $size = filesize(__DIR__ . '/' . $this->outputFile);
-        echo "\n编译完成: " . $this->outputFile . "\n";
-        echo "文件大小: " . number_format($size / 1024, 2) . " KB\n";
+        return $output;
     }
     
-    private function minifyCode($content) {
-        // 保护 heredoc/nowdoc
-        $heredocs = [];
-        $placeholder = '___HEREDOC___';
-        $index = 0;
+    /**
+     * 清理视图内容
+     */
+    private function cleanView($content) {
+        // 移除 PHP 开始标签（仅在文件开头）
+        $content = preg_replace('/^<\?php\s*/', '', $content);
+        $content = preg_replace('/^\?>\s*/', '', $content);
         
-        // 提取 heredoc（包括 CSS/JS）
-        $content = preg_replace_callback(
-            "/<<<['\"]?(\\w+)['\"]?\\s*\\n([\\s\\S]*?)\\n\\1;?/s",
-            function($m) use (&$heredocs, &$index, $placeholder) {
-                $key = $placeholder . ($index++);
-                $block = $m[2];
-                // 压缩 CSS
-                if (preg_match('/<style>(.*?)<\\/style>/s', $block, $cssMatch)) {
-                    $minCss = $this->minifyCSS($cssMatch[1]);
-                    $block = str_replace($cssMatch[1], $minCss, $block);
-                }
-                // 压缩 JS
-                if (preg_match('/<script>(.*?)<\\/script>/s', $block, $jsMatch)) {
-                    $minJs = $this->minifyJS($jsMatch[1]);
-                    $block = str_replace($jsMatch[1], $minJs, $block);
-                }
-                $heredocs[$key] = "<<<'{$m[1]}'\n{$block}\n{$m[1]};";
-                return $key;
-            },
-            $content
-        );
+        // 移除 require/include 语句
+        $content = preg_replace('/require_once\s+[^;]*;/s', '', $content);
+        $content = preg_replace('/require\s+[^;]*;/s', '', $content);
+        $content = preg_replace('/include_once\s+[^;]*;/s', '', $content);
+        $content = preg_replace('/include\s+[^;]*;/s', '', $content);
         
-        // 保护包含通配符的 rm -rf 命令，防止字符串片段被误处理
-        $specialPlaceholders = [];
-        $spIndex = 0;
-        $content = preg_replace_callback(
-            '/"rm\s*-rf\s*"\s*\.\s*escapeshellarg\(\$this->n?\s*deployPath\)\s*\.\s*"\s*\/\*\s*"\s*\.\s*escapeshellarg\(\$this->n?\s*deployPath\)\s*\.\s*"\s*\/\.\*\s*"\s*2>\/dev\/null\s*\|\|\s*true/',
-            function($m) use (&$specialPlaceholders, &$spIndex) {
-                $k = '___RM_RF___' . ($spIndex++);
-                $specialPlaceholders[$k] = $m[0];
-                return $k;
-            },
-            $content
-        );
+        // 移除不必要的变量赋值
+        $pattern = '/\$auth\s*=\s*new\s+Auth\(\);\s*/s';
+        $content = preg_replace($pattern, '', $content);
+        
+        // 移除文件末尾的 PHP 结束标签
+        $content = preg_replace('/\?>\s*$/', '', $content);
         
         // 移除 HTML 注释
         $content = preg_replace('/<!--[\s\S]*?-->/', '', $content);
-
-        // 移除多行注释
-        $content = preg_replace('/\/\*[\s\S]*?\*\//', '', $content);
-
-        // 移除单行注释（PHP/JS）：行首或分隔符后出现的 //
-        $content = preg_replace('/(^|[;{}()\[\]\s])\/\/[^\n]*$/m', '$1', $content);
-
-        // 移除以 # 开头的单行注释（PHP）
-        $content = preg_replace('/(^|[;{}()\[\]\s])#.*$/m', '$1', $content);
         
-        // 压缩空白（但要保护 SQL 语句中的关键字）
-        // 先保护 SQL 关键字周围的空格
-        $sqlKeywords = ['INSERT INTO', 'UPDATE', 'DELETE FROM', 'SELECT', 'FROM', 'WHERE', 'SET', 'VALUES'];
-        foreach ($sqlKeywords as $keyword) {
-            $content = preg_replace('/\b' . preg_quote($keyword, '/') . '\s+/', $keyword . ' ', $content);
-            $content = preg_replace('/\s+' . preg_quote($keyword, '/') . '\b/', ' ' . $keyword, $content);
+        // 移除连续的空行
+        $content = preg_replace('/\n\s*\n+/', "\n", $content);
+        $content = trim($content);
+        
+        return $content;
+    }
+    
+    /**
+     * 处理 Router 类
+     */
+    private function processRouter() {
+        $routerPath = __DIR__ . '/core/Router.php';
+        
+        if (!file_exists($routerPath)) {
+            echo "警告: Router.php 文件不存在\n";
+            return;
         }
         
-        $content = preg_replace('/\s+/', ' ', $content);
-        $content = preg_replace('/;\s+/', ';', $content);
-        $content = preg_replace('/\s*{\s*/', '{', $content);
-        $content = preg_replace('/\s*}\s*/', '}', $content);
-        $content = preg_replace('/\s*\(\s*/', '(', $content);
-        $content = preg_replace('/\s*\)\s*/', ')', $content);
-        $content = preg_replace('/,\s+/', ',', $content);
-        $content = preg_replace('/\s*=>\s*/', '=>', $content);
+            $routerContent = file_get_contents($routerPath);
+            
+        // 移除 PHP 标签
+        $routerContent = preg_replace('/^<\?php\s*/', '', $routerContent);
+        $routerContent = preg_replace('/\?>\s*$/', '', $routerContent);
         
-        // 修复 SQL 语句中表名前的空格（必须在压缩后执行）
-        $content = preg_replace('/\"INSERT INTO\{(\$table)\}/', '"INSERT INTO {$1}', $content);
-        $content = preg_replace('/\"UPDATE\{(\$table)\}/', '"UPDATE {$1}', $content);
-        $content = preg_replace('/\"DELETE FROM\{(\$table)\}/', '"DELETE FROM {$1}', $content);
-        $content = preg_replace('/SET\{(\$setStr)\}/', 'SET {$1}', $content);
-        $content = preg_replace('/WHERE\{(\$where)\}/', 'WHERE {$1}', $content);
+        // 修复路径问题
+        $routerContent = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage'/", "__DIR__ . '/storage'", $routerContent);
+        $routerContent = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/ui\/views\//", "__DIR__ . '/ui/views/", $routerContent);
         
-        // 修复 WHERE 关键字后的空格
-        $content = preg_replace('/\{(\$table)\}WHERE/', '{$1} WHERE', $content);
+        // 在单文件模式下，替换所有 render 方法使用 ViewRenderer
+        // 使用 str_replace 直接替换整个方法体（更可靠）
+        $routerContent = str_replace(
+            '    private function renderLogin($error = null) {
+        $viewPath = __DIR__ . \'/ui/views/login.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: login.php";
+        }
+    }',
+            '    private function renderLogin($error = null) {
+        ViewRenderer::render(\'login\', [\'error\' => $error]);
+    }',
+            $routerContent
+        );
         
-        // 修复 UPDATE ... SET 之间的空格（多种情况）
-        $content = preg_replace('/UPDATE\{(\$table)\}SET/', 'UPDATE {$1} SET', $content);
-        $content = preg_replace('/\"UPDATE\{(\$table)\}SET/', '"UPDATE {$1} SET', $content);
-        $content = preg_replace('/\{(\$table)\}SET/', '{$1} SET', $content);
+        $routerContent = str_replace(
+            '    private function renderDashboard($projects, $deployments, $envCheck = []) {
+        $viewPath = __DIR__ . \'/ui/views/dashboard.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: dashboard.php";
+        }
+    }',
+            '    private function renderDashboard($projects, $deployments, $envCheck = []) {
+        ViewRenderer::render(\'dashboard\', [\'projects\' => $projects, \'deployments\' => $deployments, \'envCheck\' => $envCheck]);
+    }',
+            $routerContent
+        );
         
-        // 修复 SET ... WHERE 之间的空格
-        $content = preg_replace('/SET\{(\$setStr)\}WHERE/', 'SET {$1} WHERE', $content);
-        $content = preg_replace('/\{(\$setStr)\}WHERE/', '{$1} WHERE', $content);
+        $routerContent = str_replace(
+            '    private function renderProjects($projects) {
+        $viewPath = __DIR__ . \'/ui/views/projects.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: projects.php";
+        }
+    }',
+            '    private function renderProjects($projects) {
+        ViewRenderer::render(\'projects\', [\'projects\' => $projects]);
+    }',
+            $routerContent
+        );
         
-        // 修复字段名后的等号（字段名 = :字段名）
-        $content = preg_replace('/\{(\$field)\}=/', '{$1} =', $content);
+        $routerContent = str_replace(
+            '    private function renderProjectEdit($project, $servers) {
+        $viewPath = __DIR__ . \'/ui/views/project_edit.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: project_edit.php";
+        }
+    }',
+            '    private function renderProjectEdit($project, $servers) {
+        ViewRenderer::render(\'project_edit\', [\'project\' => $project, \'servers\' => $servers]);
+    }',
+            $routerContent
+        );
         
-        // （rm -rf 通配符由上面的整体占位保护）
+        $routerContent = str_replace(
+            '    private function renderServers($servers) {
+        $viewPath = __DIR__ . \'/ui/views/servers.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: servers.php";
+        }
+    }',
+            '    private function renderServers($servers) {
+        ViewRenderer::render(\'servers\', [\'servers\' => $servers]);
+    }',
+            $routerContent
+        );
         
-        // 修复 env PATH= 和命令之间的空格（防止被压缩掉）
-        $content = preg_replace('/env PATH=\'([^\']+)\'([a-zA-Z])/', "env PATH='$1' $2", $content);
-        $content = preg_replace('/env PATH="([^"]+)"([a-zA-Z])/', 'env PATH="$1" $2', $content);
-        // 修复 env PATH={$...}" . trim($...) 中缺少空格的情况
-        $content = preg_replace('/env PATH=\{(\$[^}]+)\}"\.trim\(/', 'env PATH={$1} " . trim(', $content);
-        $content = preg_replace('/env PATH=\{(\$[^}]+)\}([a-zA-Z])/', 'env PATH={$1} $2', $content);
-        // 修复 export PATH=... && 后面缺少空格的情况
-        $content = preg_replace('/export PATH=\{(\$[^}]+)\}&&/', 'export PATH={$1} && ', $content);
-        $content = preg_replace('/export PATH=\'([^\']+)\'&&/', "export PATH='$1' && ", $content);
-        $content = preg_replace('/export PATH="([^"]+)"&&/', 'export PATH="$1" && ', $content);
+        $routerContent = str_replace(
+            '    private function renderServerEdit($server) {
+        $viewPath = __DIR__ . \'/ui/views/server_edit.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: server_edit.php";
+        }
+    }',
+            '    private function renderServerEdit($server) {
+        ViewRenderer::render(\'server_edit\', [\'server\' => $server]);
+    }',
+            $routerContent
+        );
         
-        // 恢复 heredoc
-        foreach ($heredocs as $key => $value) {
+        $routerContent = str_replace(
+            '    private function renderDeployments($deployments) {
+        $viewPath = __DIR__ . \'/ui/views/deployments.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: deployments.php";
+        }
+    }',
+            '    private function renderDeployments($deployments) {
+        ViewRenderer::render(\'deployments\', [\'deployments\' => $deployments]);
+    }',
+            $routerContent
+        );
+        
+        $this->output .= "\n/* --- Router.php --- */\n";
+        $this->output .= $routerContent;
+        $this->output .= "\n\n";
+    }
+    
+    /**
+     * 构建主入口代码
+     */
+    private function buildMainEntry() {
+        return 'if(php_sapi_name()!==\'cli\'){try{Logger::init();Database::getInstance();$router=new Router();$router->handle();}catch(Throwable $e){error_log(\'Deployer Error: \' . $e->getMessage() . \' in \' . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString());if(!headers_sent()){header(\'Content-Type: text/html; charset=UTF-8\');}echo \'<h1>Error</h1><pre>\' . htmlspecialchars($e->getMessage() . PHP_EOL . $e->getFile() . \' :\' . $e->getLine() . PHP_EOL . $e->getTraceAsString()) . \'</pre>\';exit;}}';
+    }
+    
+    /**
+     * 清理代码
+     */
+    private function cleanCode($content) {
+        // 确保类定义前有空格（但不要破坏已有的类定义）
+        $content = preg_replace('/([^\\s{}])class\\s/', '$1 class ', $content);
+        $content = preg_replace('/([^\\s{}])interface\\s/', '$1 interface ', $content);
+        $content = preg_replace('/([^\\s{}])trait\\s/', '$1 trait ', $content);
+        
+        // 确保 } 和 class/interface/trait 之间有空格
+        $content = preg_replace('/\\}(class|interface|trait)\\s/', '} $1 ', $content);
+        
+        // 检查括号平衡（仅检查，不自动修复，避免错误）
+        $openCount = substr_count($content, '{');
+        $closeCount = substr_count($content, '}');
+        if ($openCount !== $closeCount) {
+            echo "警告: 括号不平衡 (开: {$openCount}, 闭: {$closeCount})，请检查代码\n";
+        }
+        
+        return $content;
+    }
+    
+    /**
+     * PHP 代码压缩（极简模式，只移除注释和多余空行）
+     */
+    private function minifyPHP($content) {
+        echo "压缩代码（极简模式）...\n";
+        
+        // 移除多行注释
+        $content = preg_replace('/\/\*[\s\S]*?\*\//', '', $content);
+        
+        // 移除单行注释（但要小心字符串中的 //）
+        // 先保护字符串中的内容
+        $strings = [];
+        $content = preg_replace_callback('/(["\'])(?:\\\\.|(?!\1).)*\1/', function($m) use (&$strings) {
+            $key = '___STRING_' . count($strings) . '___';
+            $strings[$key] = $m[0];
+            return $key;
+        }, $content);
+        
+        // 移除单行注释（不在字符串中的）
+        $content = preg_replace('/\/\/[^\n]*/', '', $content);
+        
+        // 恢复字符串
+        foreach ($strings as $key => $value) {
             $content = str_replace($key, $value, $content);
         }
         
-        // 恢复 rm -rf 特殊占位符（并规范空白）
-        foreach ($specialPlaceholders as $k => $orig) {
-            $norm = preg_replace('/\s+/', ' ', $orig);
-            $norm = trim($norm);
-            $content = str_replace($k, $norm, $content);
-        }
+        // 移除行首行尾空白
+        $content = preg_replace('/^[ \t]+/m', '', $content);
+        $content = preg_replace('/[ \t]+$/m', '', $content);
         
-        return trim($content);
+        // 移除多个连续空行（保留最多一个空行）
+        $content = preg_replace('/\n{3,}/', "\n\n", $content);
+        
+        // 不进行其他压缩操作，避免破坏语法
+        return $content;
     }
     
+    /**
+     * CSS 压缩
+     */
     private function minifyCSS($css) {
         // 移除 CSS 注释
         $css = preg_replace('/\/\*[\s\S]*?\*\//', '', $css);
@@ -309,24 +415,48 @@ class Compiler {
         return $css;
     }
 
+    /**
+     * JavaScript 压缩
+     */
     private function minifyJS($js) {
         // 移除块注释
         $js = preg_replace('/\/\*[\s\S]*?\*\//', '', $js);
-        // 移除行注释（尽量避免误伤：在分隔符或空白后出现的 //）
+        
+        // 移除行注释（尽量避免误伤字符串中的 //）
+        // 先保护字符串
+        $strings = [];
+        $js = preg_replace_callback('/(["\'])(?:\\\\.|(?!\1).)*\1/', function($m) use (&$strings) {
+            $key = '___STRING_' . count($strings) . '___';
+            $strings[$key] = $m[0];
+            return $key;
+        }, $js);
+        
+        // 移除行注释
         $js = preg_replace('/(^|[;{}()\[\]\s])\/\/[^\n]*$/m', '$1', $js);
+        
+        // 恢复字符串
+        foreach ($strings as $key => $value) {
+            $js = str_replace($key, $value, $js);
+        }
+        
         // 压缩空白
         $js = preg_replace('/\s+/', ' ', $js);
+        
         // 去除符号两侧空白
         $js = preg_replace('/\s*([{}();,:=\[\]+\-<>\|&])\s*/', '$1', $js);
+        
         // 规范分号
         $js = preg_replace('/;\s+/', ';', $js);
+        
         return trim($js);
     }
 }
 
+// 主执行逻辑
 if (php_sapi_name() === 'cli') {
     $compiler = new Compiler();
     $compiler->compile();
 } else {
     echo "请在命令行运行此脚本: php compile.php\n";
 }
+

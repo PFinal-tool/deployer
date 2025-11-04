@@ -160,6 +160,26 @@ class Deployer {
                     'output' => implode("\n", $output)
                 ];
             }
+        } catch (Exception $e) {
+            // 外层 try 的异常处理（初始化 SSH 等操作失败）
+            $error = $e->getMessage();
+            Logger::error("Deployment initialization failed: {$error}");
+            
+            // 更新部署记录为失败
+            $this->db->update('deployments', [
+                'status' => 'failed',
+                'error' => $error,
+                'output' => "=== Deployment Initialization Failed ===\nError: {$error}",
+                'finished_at' => date('Y-m-d H:i:s')
+            ], 'id = ?', [$deploymentId]);
+            
+            return [
+                'success' => false,
+                'deployment_id' => $deploymentId,
+                'error' => $error,
+                'output' => "=== Deployment Initialization Failed ===\nError: {$error}"
+            ];
+        }
     }
     
     /**
