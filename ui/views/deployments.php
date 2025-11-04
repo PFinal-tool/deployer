@@ -62,17 +62,44 @@ require_once __DIR__ . '/../../lang/zh.php';
 function showLog(deploymentId){
   const row=document.getElementById('log-row-'+deploymentId);
   const content=document.getElementById('log-content-'+deploymentId);
-  if(row.style.display==='none'){
-    row.style.display='';
-    if(content.textContent==='加载中...'){
+  if(!row || !content){
+    alert('无法找到日志元素');
+    return;
+  }
+  if(row.style.display==='none' || row.style.display===''){
+    row.style.display='table-row';
+    if(content.textContent==='加载中...' || content.textContent.trim()===''){
+      content.textContent='加载中...';
       fetch('?action=api&endpoint=deploy_log&deployment_id='+deploymentId)
-        .then(res=>res.json())
+        .then(res=>{
+          if(!res.ok){
+            throw new Error('HTTP '+res.status);
+          }
+          return res.json();
+        })
         .then(data=>{
-          const logText=data.output||data.error||'暂无日志';
+          let logText='';
+          if(data.output){
+            logText=data.output;
+          }else if(data.error){
+            logText='错误: '+data.error;
+          }else{
+            logText='暂无日志';
+          }
           content.textContent=logText;
+          content.style.whiteSpace='pre-wrap';
+          content.style.fontFamily='monospace';
+          content.style.fontSize='12px';
+          content.style.padding='10px';
+          content.style.backgroundColor='#f5f5f5';
+          content.style.border='1px solid #ddd';
+          content.style.borderRadius='4px';
+          content.style.maxHeight='500px';
+          content.style.overflow='auto';
         })
         .catch(err=>{
           content.textContent='加载日志失败: '+err.message;
+          content.style.color='red';
         });
     }
   }else{

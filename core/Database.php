@@ -157,9 +157,28 @@ class Database {
         }
         $setStr = implode(', ', $setParts);
         
-        $sql = "UPDATE {$table} SET {$setStr} WHERE {$where}";
+        // 将 WHERE 子句中的 ? 替换为命名参数
+        $whereParamsNamed = [];
+        $wherePlaceholder = $where;
+        $paramIndex = 0;
+        
+        // 如果 WHERE 子句包含 ?，将其替换为命名参数
+        if (strpos($where, '?') !== false) {
+            $wherePlaceholder = preg_replace_callback('/\?/', function() use (&$paramIndex, &$whereParamsNamed, $whereParams) {
+                $paramName = ':where_param_' . $paramIndex++;
+                if (isset($whereParams[$paramIndex - 1])) {
+                    $whereParamsNamed[$paramName] = $whereParams[$paramIndex - 1];
+                }
+                return $paramName;
+            }, $where);
+        } else {
+            // 如果没有 ?，假设 WHERE 子句已经使用命名参数
+            $whereParamsNamed = $whereParams;
+        }
+        
+        $sql = "UPDATE {$table} SET {$setStr} WHERE {$wherePlaceholder}";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute(array_merge($data, $whereParams));
+        $stmt->execute(array_merge($data, $whereParamsNamed));
         
         return $stmt->rowCount();
     }

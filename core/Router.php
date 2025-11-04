@@ -288,27 +288,39 @@ class Router {
                 'branch' => $_POST['branch'] ?? 'master',
                 'deploy_path' => $_POST['deploy_path'] ?? '',
                 'server_id' => $_POST['server_id'] ?? 0,
-                'git_username' => $_POST['git_username'] ?? null,
-                'git_password' => $_POST['git_password'] ?? null,
+                'git_username' => trim($_POST['git_username'] ?? '') ?: null,
                 'pre_deploy_script' => $_POST['pre_deploy_script'] ?? '',
                 'post_deploy_script' => $_POST['post_deploy_script'] ?? '',
                 'webhook_enabled' => isset($_POST['webhook_enabled']) ? 1 : 0,
                 'updated_at' => date('Y-m-d H:i:s')
             ];
             
-            // 编辑时，如果密码为空则保留旧密码
+            // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
+            $gitPassword = trim($_POST['git_password'] ?? '');
             if ($id && $project) {
-                $gitPassword = trim($_POST['git_password'] ?? '');
+                // 编辑模式：如果密码字段为空，保留旧密码
                 if ($gitPassword === '') {
                     $data['git_password'] = $project['git_password'] ?? null;
+                    Logger::debug("Project edit: keeping old git_password (empty field provided)");
+                } else {
+                    $data['git_password'] = $gitPassword;
+                    Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")");
                 }
+            } else {
+                // 新增模式：如果密码为空，保存 null
+                $data['git_password'] = $gitPassword ?: null;
+                Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null"));
             }
+            
+            Logger::debug("Project save: git_username=" . ($data['git_username'] ?? 'null') . ", git_password=" . (isset($data['git_password']) && $data['git_password'] ? 'provided' : 'null'));
             
             if ($id) {
                 $db->update('projects', $data, 'id = ?', [$id]);
+                Logger::info("Project updated: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
             } else {
                 $data['created_at'] = date('Y-m-d H:i:s');
                 $id = $db->insert('projects', $data);
+                Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
             }
             
             header('Location: ?action=projects');
@@ -482,9 +494,20 @@ class Router {
             exit;
         }
         
-        // 异步执行部署（实际应该是后台任务）
-        $deployer = new Deployer();
-        $result = $deployer->deploy($projectId, $branch);
+        try {
+            // 同步执行部署
+            $deployer = new Deployer();
+            $result = $deployer->deploy($projectId, $branch);
+            
+            if ($result['success']) {
+                $_SESSION['flash'] = ['type' => 'success', 'message' => '部署成功'];
+            } else {
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')];
+            }
+        } catch (Exception $e) {
+            Logger::error("Deployment handler exception: " . $e->getMessage());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . $e->getMessage()];
+        }
         
         header('Location: ?action=deployments&project_id=' . $projectId);
         exit;
@@ -553,9 +576,34 @@ class Router {
         }
         
         $db = Database::getInstance();
-        $deployment = $db->fetchOne("SELECT output, error FROM deployments WHERE id = ?", [$deploymentId]);
+        $deployment = $db->fetchOne("SELECT output, error, status FROM deployments WHERE id = ?", [$deploymentId]);
         
-        $this->renderJson($deployment ?: ['error' => 'Not found'], $deployment ? 200 : 404);
+        if (!$deployment) {
+            $this->renderJson(['error' => 'Not found'], 404);
+            return;
+        }
+        
+        // 组合输出和错误信息
+        $logContent = '';
+        if (!empty($deployment['output'])) {
+            $logContent .= $deployment['output'];
+        }
+        if (!empty($deployment['error'])) {
+            if (!empty($logContent)) {
+                $logContent .= "\n\n";
+            }
+            $logContent .= "错误信息: " . $deployment['error'];
+        }
+        
+        if (empty($logContent)) {
+            $logContent = '暂无日志';
+        }
+        
+        $this->renderJson([
+            'output' => $logContent,
+            'error' => $deployment['error'] ?? null,
+            'status' => $deployment['status'] ?? 'unknown'
+        ]);
     }
     
     // 渲染方法

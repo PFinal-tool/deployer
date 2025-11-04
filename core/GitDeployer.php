@@ -25,6 +25,9 @@ class GitDeployer {
     public function deploy() {
         $output = [];
         
+        // 记录 Git 配置信息
+        Logger::debug("GitDeployer deploy: repo_url=" . $this->repoUrl . ", branch=" . $this->branch . ", username=" . ($this->gitUsername ? 'provided' : 'empty'));
+        
         // 1. 检查目录是否存在
         $checkDir = "test -d " . escapeshellarg($this->deployPath);
         $dirExists = $this->sshExecutor->execute($checkDir . " && echo 'exists' || echo 'not_exists'");
@@ -33,7 +36,11 @@ class GitDeployer {
             // 目录不存在，创建并克隆
             $output[] = "Creating directory and cloning repository...";
             $this->sshExecutor->execute("mkdir -p " . escapeshellarg($this->deployPath));
-            $output[] = $this->sshExecutor->execute($this->buildCloneCommand());
+            $cloneCmd = $this->buildCloneCommand();
+            // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
+            $logCmd = str_replace($this->gitPassword ?? '', '***', $cloneCmd);
+            Logger::debug("Clone command: " . $logCmd);
+            $output[] = $this->sshExecutor->execute($cloneCmd);
         } else {
             // 目录存在，检查是否是 git 仓库
             $checkGit = "cd " . escapeshellarg($this->deployPath) . " && git rev-parse --git-dir > /dev/null 2>&1 && echo 'is_git' || echo 'not_git'";
@@ -47,11 +54,19 @@ class GitDeployer {
                     escapeshellarg($this->deployPath)
                 );
                 $this->sshExecutor->execute($cleanCmd);
-                $output[] = $this->sshExecutor->execute($this->buildCloneCommand());
+                $cloneCmd = $this->buildCloneCommand();
+                // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
+                $logCmd = str_replace($this->gitPassword ?? '', '***', $cloneCmd);
+                Logger::debug("Clone command: " . $logCmd);
+                $output[] = $this->sshExecutor->execute($cloneCmd);
             } else {
                 // 目录存在且是 git 仓库，拉取更新
                 $output[] = "Pulling latest changes...";
-                $output[] = $this->sshExecutor->execute($this->buildPullCommand());
+                $pullCmd = $this->buildPullCommand();
+                // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
+                $logCmd = str_replace($this->gitPassword ?? '', '***', $pullCmd);
+                Logger::debug("Pull command: " . $logCmd);
+                $output[] = $this->sshExecutor->execute($pullCmd);
             }
         }
         
@@ -86,12 +101,17 @@ class GitDeployer {
      */
     private function buildAuthenticatedUrl() {
         // 如果 URL 中已经包含用户名，直接返回
-        if (preg_match('/^https?:\/\/[^@]+@/', $this->repoUrl)) {
+        // 使用 strpos 检查是否包含 @ 符号，更可靠
+        if (preg_match('#^https?://[^@]+@#', $this->repoUrl)) {
+            Logger::debug("Git URL already contains authentication info");
             return $this->repoUrl;
         }
         
+        // 记录认证信息状态（不记录密码）
+        Logger::debug("Git authentication check: username=" . ($this->gitUsername ? 'provided' : 'empty') . ", password=" . ($this->gitPassword ? 'provided' : 'empty') . ", repo_url=" . $this->repoUrl);
+        
         // 如果提供了用户名和密码，且 URL 是 HTTPS，则将认证信息嵌入 URL
-        if ($this->gitUsername && $this->gitPassword && preg_match('/^https:\/\//', $this->repoUrl)) {
+        if ($this->gitUsername && $this->gitPassword && strpos($this->repoUrl, 'https://') === 0) {
             $urlParts = parse_url($this->repoUrl);
             $scheme = isset($urlParts['scheme']) ? $urlParts['scheme'] : 'https';
             $host = isset($urlParts['host']) ? $urlParts['host'] : '';
@@ -100,7 +120,7 @@ class GitDeployer {
             $query = isset($urlParts['query']) ? '?' . $urlParts['query'] : '';
             $fragment = isset($urlParts['fragment']) ? '#' . $urlParts['fragment'] : '';
             
-            return sprintf(
+            $authenticatedUrl = sprintf(
                 '%s://%s:%s@%s%s%s%s',
                 $scheme,
                 rawurlencode($this->gitUsername),
@@ -110,6 +130,16 @@ class GitDeployer {
                 $path,
                 $query . $fragment
             );
+            
+            // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
+            $logUrl = str_replace($this->gitPassword ?? '', '***', $authenticatedUrl);
+            Logger::debug("Built authenticated Git URL: " . $logUrl);
+            return $authenticatedUrl;
+        }
+        
+        // 如果没有认证信息，记录警告
+        if (strpos($this->repoUrl, 'https://') === 0 && (!$this->gitUsername || !$this->gitPassword)) {
+            Logger::warning("Git HTTPS URL requires authentication but credentials not provided: " . $this->repoUrl);
         }
         
         return $this->repoUrl;
@@ -122,7 +152,7 @@ class GitDeployer {
         $url = $this->buildAuthenticatedUrl();
         // 如果提供了认证信息且 URL 已更改，先更新 remote URL
         $commands = [];
-        if ($this->gitUsername && $this->gitPassword && preg_match('/^https:\/\//', $this->repoUrl)) {
+        if ($this->gitUsername && $this->gitPassword && strpos($this->repoUrl, 'https://') === 0) {
             $commands[] = sprintf(
                 "cd %s && git remote set-url origin %s",
                 escapeshellarg($this->deployPath),
