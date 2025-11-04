@@ -39,6 +39,7 @@ class Compiler {
             'servers.php',
             'server_edit.php',
             'deployments.php',
+            'change_password.php',
         ];
     }
     
@@ -353,6 +354,21 @@ class Compiler {
             $routerContent
         );
         
+        $routerContent = str_replace(
+            '    private function renderChangePassword($error = null, $success = false, $required = false) {
+        $viewPath = __DIR__ . \'/ui/views/change_password.php\';
+        if (file_exists($viewPath)) {
+            include $viewPath;
+        } else {
+            echo "View file not found: change_password.php";
+        }
+    }',
+            '    private function renderChangePassword($error = null, $success = false, $required = false) {
+        ViewRenderer::render(\'change_password\', [\'error\' => $error, \'success\' => $success, \'required\' => $required]);
+    }',
+            $routerContent
+        );
+        
         // 移除文件分隔注释以减小体积
         // $this->output .= "\n/* --- Router.php --- */\n";
         $this->output .= "\n" . $routerContent . "\n\n";
@@ -529,20 +545,44 @@ class Compiler {
         // 移除多个连续空行（保留最多一个空行）
         $result = preg_replace('/\n{3,}/', "\n\n", $result);
         
+        // 先保护字符串内容，避免压缩时破坏 SQL 语句等
+        $strings = [];
+        $stringIndex = 0;
+        $protectedResult = preg_replace_callback('/(["\'])(?:\\\\.|(?!\1).)*\1/', function($m) use (&$strings, &$stringIndex) {
+            $key = '___PROTECTED_STRING_' . $stringIndex++ . '___';
+            $strings[$key] = $m[0];
+            return $key;
+        }, $result);
+        
+        // 如果保护失败，直接使用原结果
+        if ($protectedResult === null || empty($protectedResult)) {
+            $protectedResult = $result;
+            $strings = [];
+        }
+        
         // 更激进的空格压缩（参考 Adminer，但更保守）
-        // 移除分号前后的空格
-        $result = preg_replace('/\s*;\s*/', ';', $result);
-        // 移除逗号后的空格
-        $result = preg_replace('/,\s+/', ',', $result);
-        // 移除花括号前后的空格（但要小心）
-        $result = preg_replace('/\s*\{\s*/', '{', $result);
-        $result = preg_replace('/\s*\}\s*/', '}', $result);
-        // 移除括号前后的空格
-        $result = preg_replace('/\s*\(\s*/', '(', $result);
-        $result = preg_replace('/\s*\)\s*/', ')', $result);
-        // 移除方括号前后的空格
-        $result = preg_replace('/\s*\[\s*/', '[', $result);
-        $result = preg_replace('/\s*\]\s*/', ']', $result);
+        // 只在字符串保护成功时才进行压缩
+        if (!empty($strings)) {
+            // 移除分号前后的空格（不在字符串中）
+            $protectedResult = preg_replace('/\s*;\s*/', ';', $protectedResult);
+            // 移除逗号后的空格
+            $protectedResult = preg_replace('/,\s+/', ',', $protectedResult);
+            // 移除花括号前后的空格（但要小心）
+            $protectedResult = preg_replace('/\s*\{\s*/', '{', $protectedResult);
+            $protectedResult = preg_replace('/\s*\}\s*/', '}', $protectedResult);
+            // 移除括号前后的空格
+            $protectedResult = preg_replace('/\s*\(\s*/', '(', $protectedResult);
+            $protectedResult = preg_replace('/\s*\)\s*/', ')', $protectedResult);
+            // 移除方括号前后的空格
+            $protectedResult = preg_replace('/\s*\[\s*/', '[', $protectedResult);
+            $protectedResult = preg_replace('/\s*\]\s*/', ']', $protectedResult);
+            
+            // 恢复字符串内容
+            $result = $protectedResult;
+            foreach ($strings as $key => $value) {
+                $result = str_replace($key, $value, $result);
+            }
+        }
         
         // 移除多个连续空行（保留最多一个空行）
         $result = preg_replace('/\n{3,}/', "\n\n", $result);

@@ -137,11 +137,11 @@ class Database {
             $stmt->execute(['admin', $password]);
         } else {
             // 检查现有 admin 用户是否使用默认密码（兼容旧数据）
-            $user = $this->db->fetchOne("SELECT id, password, is_default_password FROM users WHERE username = ?", ['admin']);
+            $user = $this->fetchOne("SELECT id, password, is_default_password FROM users WHERE username = ?", ['admin']);
             if ($user && ($user['is_default_password'] ?? 0) == 0) {
                 // 验证密码是否为默认密码
                 if (password_verify('admin', $user['password'])) {
-                    $this->db->update('users', ['is_default_password' => 1], 'id = ?', [$user['id']]);
+                    $this->update('users', ['is_default_password' => 1], 'id = ?', [$user['id']]);
                 }
             }
         }
