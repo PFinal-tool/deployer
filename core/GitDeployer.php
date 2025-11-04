@@ -28,6 +28,12 @@ class GitDeployer {
         // 记录 Git 配置信息
         Logger::debug("GitDeployer deploy: repo_url=" . $this->repoUrl . ", branch=" . $this->branch . ", username=" . ($this->gitUsername ? 'provided' : 'empty'));
         
+        // 检查是 tag 还是 branch（在克隆/拉取前检查）
+        $isTag = $this->isTag($this->branch);
+        $refType = $isTag ? 'tag' : 'branch';
+        Logger::debug("Git reference type: {$refType}, name: {$this->branch}");
+        $output[] = "Deploying {$refType}: {$this->branch}";
+        
         // 1. 检查目录是否存在
         $checkDir = "test -d " . escapeshellarg($this->deployPath);
         $dirExists = $this->sshExecutor->execute($checkDir . " && echo 'exists' || echo 'not_exists'");
@@ -36,7 +42,7 @@ class GitDeployer {
             // 目录不存在，创建并克隆
             $output[] = "Creating directory and cloning repository...";
             $this->sshExecutor->execute("mkdir -p " . escapeshellarg($this->deployPath));
-            $cloneCmd = $this->buildCloneCommand();
+            $cloneCmd = $this->buildCloneCommand($isTag);
             // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
             $logCmd = str_replace($this->gitPassword ?? '', '***', $cloneCmd);
             Logger::debug("Clone command: " . $logCmd);
@@ -54,7 +60,7 @@ class GitDeployer {
                     escapeshellarg($this->deployPath)
                 );
                 $this->sshExecutor->execute($cleanCmd);
-                $cloneCmd = $this->buildCloneCommand();
+                $cloneCmd = $this->buildCloneCommand($isTag);
                 // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
                 $logCmd = str_replace($this->gitPassword ?? '', '***', $cloneCmd);
                 Logger::debug("Clone command: " . $logCmd);
@@ -62,7 +68,7 @@ class GitDeployer {
             } else {
                 // 目录存在且是 git 仓库，拉取更新
                 $output[] = "Pulling latest changes...";
-                $pullCmd = $this->buildPullCommand();
+                $pullCmd = $this->buildPullCommand($isTag);
                 // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
                 $logCmd = str_replace($this->gitPassword ?? '', '***', $pullCmd);
                 Logger::debug("Pull command: " . $logCmd);
@@ -85,7 +91,21 @@ class GitDeployer {
     /**
      * 构建克隆命令
      */
-    private function buildCloneCommand() {
+    private function buildCloneCommand($isTag = false) {
+        if ($isTag) {
+            // Tag 部署：先克隆仓库，再 checkout tag
+            $url = $this->buildAuthenticatedUrl();
+            $cmd = sprintf(
+                "cd %s && git clone %s temp_repo && cd temp_repo && git checkout %s && cd .. && mv temp_repo/* temp_repo/.* . 2>/dev/null || true && rm -rf temp_repo",
+                escapeshellarg($this->deployPath),
+                escapeshellarg($url),
+                escapeshellarg($this->branch)
+            );
+            Logger::debug("Clone command for tag: {$this->branch}");
+            return $cmd;
+        }
+        
+        // Branch 部署：使用标准方式
         $url = $this->buildAuthenticatedUrl();
         $cmd = sprintf(
             "cd %s && git clone -b %s %s .",
@@ -94,6 +114,72 @@ class GitDeployer {
             escapeshellarg($url)
         );
         return $cmd;
+    }
+    
+    /**
+     * 检查指定的是分支还是 tag
+     */
+    private function isTag($ref) {
+        // 先尝试通过远程仓库检查（不依赖本地仓库是否存在）
+        try {
+            $url = $this->buildAuthenticatedUrl();
+            // 检查远程 tag
+            $checkRemoteTagCmd = sprintf(
+                "git ls-remote --tags %s 2>&1 | grep -q 'refs/tags/%s$' && echo 'is_tag' || echo 'not_tag'",
+                escapeshellarg($url),
+                escapeshellarg($ref)
+            );
+            $result = trim($this->sshExecutor->execute($checkRemoteTagCmd));
+            
+            if ($result === 'is_tag') {
+                Logger::debug("Detected tag: {$ref}");
+                return true;
+            }
+            
+            // 如果远程没有找到 tag，检查是否是分支
+            $checkRemoteBranchCmd = sprintf(
+                "git ls-remote --heads %s 2>&1 | grep -q 'refs/heads/%s$' && echo 'is_branch' || echo 'not_branch'",
+                escapeshellarg($url),
+                escapeshellarg($ref)
+            );
+            $branchResult = trim($this->sshExecutor->execute($checkRemoteBranchCmd));
+            
+            if ($branchResult === 'is_branch') {
+                Logger::debug("Detected branch: {$ref}");
+                return false;
+            }
+            
+            // 如果远程都没有找到，尝试检查本地（如果仓库已存在）
+            $checkDir = "test -d " . escapeshellarg($this->deployPath);
+            $dirExists = trim($this->sshExecutor->execute($checkDir . " && echo 'exists' || echo 'not_exists'"));
+            
+            if ($dirExists === 'exists') {
+                $checkGit = "cd " . escapeshellarg($this->deployPath) . " && git rev-parse --git-dir > /dev/null 2>&1 && echo 'is_git' || echo 'not_git'";
+                $isGitRepo = trim($this->sshExecutor->execute($checkGit));
+                
+                if ($isGitRepo === 'is_git') {
+                    // 检查本地 tag
+                    $checkLocalTagCmd = sprintf(
+                        "cd %s && git rev-parse -q --verify refs/tags/%s 2>/dev/null && echo 'is_tag' || echo 'not_tag'",
+                        escapeshellarg($this->deployPath),
+                        escapeshellarg($ref)
+                    );
+                    $localResult = trim($this->sshExecutor->execute($checkLocalTagCmd));
+                    
+                    if ($localResult === 'is_tag') {
+                        Logger::debug("Detected local tag: {$ref}");
+                        return true;
+                    }
+                }
+            }
+            
+            // 默认当作分支处理
+            Logger::debug("Cannot determine if {$ref} is tag or branch, assuming branch");
+            return false;
+        } catch (Exception $e) {
+            Logger::debug("Error checking tag/branch for {$ref}, assuming branch: " . $e->getMessage());
+            return false; // 默认当作分支处理
+        }
     }
     
     /**
@@ -148,8 +234,9 @@ class GitDeployer {
     /**
      * 构建拉取命令
      */
-    private function buildPullCommand() {
+    private function buildPullCommand($isTag = false) {
         $url = $this->buildAuthenticatedUrl();
+        
         // 如果提供了认证信息且 URL 已更改，先更新 remote URL
         $commands = [];
         if ($this->gitUsername && $this->gitPassword && strpos($this->repoUrl, 'https://') === 0) {
@@ -159,12 +246,25 @@ class GitDeployer {
                 escapeshellarg($url)
             );
         }
-        $commands[] = sprintf(
-            "cd %s && git fetch origin && git checkout %s && git pull origin %s",
-            escapeshellarg($this->deployPath),
-            escapeshellarg($this->branch),
-            escapeshellarg($this->branch)
-        );
+        
+        if ($isTag) {
+            // Tag 部署：fetch tags 然后 checkout tag（tag 不能 pull）
+            $commands[] = sprintf(
+                "cd %s && git fetch origin --tags && git checkout %s",
+                escapeshellarg($this->deployPath),
+                escapeshellarg($this->branch)
+            );
+            Logger::debug("Pull command for tag: {$this->branch}");
+        } else {
+            // Branch 部署：fetch 然后 checkout 和 pull
+            $commands[] = sprintf(
+                "cd %s && git fetch origin && git checkout %s && git pull origin %s",
+                escapeshellarg($this->deployPath),
+                escapeshellarg($this->branch),
+                escapeshellarg($this->branch)
+            );
+        }
+        
         return implode(' && ', $commands);
     }
     

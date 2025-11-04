@@ -9,7 +9,28 @@ class Auth {
         $this->db = Database::getInstance();
         
         if (session_status() === PHP_SESSION_NONE) {
+            // 配置会话安全选项
+            ini_set('session.cookie_httponly', 1);
+            ini_set('session.use_strict_mode', 1);
+            ini_set('session.cookie_samesite', 'Strict');
+            
+            // 如果使用 HTTPS，启用 secure cookie
+            if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') {
+                ini_set('session.cookie_secure', 1);
+            }
+            
+            // 配置会话名称
+            session_name('deployer_session');
+            
             session_start();
+            
+            // 定期重新生成会话 ID（防止会话固定攻击）
+            if (!isset($_SESSION['created'])) {
+                $_SESSION['created'] = time();
+            } elseif (time() - $_SESSION['created'] > 1800) { // 30 分钟
+                session_regenerate_id(true);
+                $_SESSION['created'] = time();
+            }
         }
     }
     

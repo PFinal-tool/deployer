@@ -55,7 +55,7 @@ require_once __DIR__ . '/../../lang/zh.php';
           <td><?php echo htmlspecialchars($project['branch']); ?></td>
           <td><?php echo htmlspecialchars($project['server_name'] ?? '-'); ?></td>
           <td>
-            <a href="?action=deploy&id=<?php echo $project['id']; ?>&branch=<?php echo urlencode($project['branch']); ?>" class="btn btn-small" onclick="return confirm('确定要部署吗？')"><?php echo Lang::get('deploy'); ?></a>
+            <a href="#" class="btn btn-small" onclick="showDeployDialog(<?php echo $project['id']; ?>, '<?php echo htmlspecialchars($project['branch'], ENT_QUOTES); ?>'); return false;"><?php echo Lang::get('deploy'); ?></a>
             <a href="?action=project_edit&id=<?php echo $project['id']; ?>" class="btn btn-small"><?php echo Lang::get('edit'); ?></a>
             <a href="?action=project_delete&id=<?php echo $project['id']; ?>" class="btn btn-small btn-danger" onclick="return confirmDelete('确定要删除此项目吗？')"><?php echo Lang::get('delete'); ?></a>
           </td>
@@ -65,7 +65,84 @@ require_once __DIR__ . '/../../lang/zh.php';
   </table>
 </div>
 
+<!-- 部署对话框 -->
+<div id="deploy-dialog" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000;">
+  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:20px; border-radius:5px; min-width:400px;">
+    <h3 style="margin-top:0;">部署项目</h3>
+    <form id="deploy-form" method="GET">
+      <input type="hidden" name="action" value="deploy">
+      <input type="hidden" name="id" id="deploy-project-id">
+      
+      <div style="margin-bottom:15px;">
+        <label style="display:block; margin-bottom:5px;">
+          <input type="radio" name="deploy_type" value="default" checked onchange="toggleCustomRef()">
+          使用默认分支/标签: <code id="default-branch"></code>
+        </label>
+      </div>
+      
+      <div style="margin-bottom:15px;">
+        <label style="display:block; margin-bottom:5px;">
+          <input type="radio" name="deploy_type" value="custom" onchange="toggleCustomRef()">
+          指定分支/标签:
+        </label>
+        <input type="text" name="branch" id="custom-branch" placeholder="输入分支名或标签名，如: master, v1.0.0" style="width:100%; padding:5px; margin-top:5px;" disabled>
+        <div style="font-size:12px; color:#666; margin-top:5px;">
+          提示：可以输入分支名（如 master）或标签名（如 v1.0.0），系统会自动识别
+        </div>
+      </div>
+      
+      <div style="text-align:right; margin-top:20px;">
+        <button type="button" class="btn btn-small" onclick="hideDeployDialog()">取消</button>
+        <button type="submit" class="btn btn-small" onclick="return confirm('确定要部署吗？')">开始部署</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <?php echo getJS(); ?>
+<script>
+function showDeployDialog(projectId, defaultBranch) {
+  document.getElementById('deploy-project-id').value = projectId;
+  document.getElementById('default-branch').textContent = defaultBranch;
+  document.getElementById('custom-branch').value = '';
+  document.getElementById('deploy-dialog').style.display = 'block';
+}
+
+function hideDeployDialog() {
+  document.getElementById('deploy-dialog').style.display = 'none';
+}
+
+function toggleCustomRef() {
+  const customRef = document.getElementById('custom-branch');
+  const deployType = document.querySelector('input[name="deploy_type"]:checked').value;
+  customRef.disabled = deployType !== 'custom';
+  if (deployType === 'custom') {
+    customRef.focus();
+  } else {
+    customRef.value = '';
+  }
+}
+
+// 表单提交前处理：如果选择默认分支，移除 branch 参数
+document.getElementById('deploy-form').addEventListener('submit', function(e) {
+  const deployType = document.querySelector('input[name="deploy_type"]:checked').value;
+  if (deployType === 'default') {
+    // 移除 branch 输入框，让后端使用默认分支
+    const branchInput = document.getElementById('custom-branch');
+    if (branchInput) {
+      branchInput.disabled = true;
+      branchInput.name = '';
+    }
+  }
+});
+
+// 点击对话框外部关闭
+document.getElementById('deploy-dialog').addEventListener('click', function(e) {
+  if (e.target === this) {
+    hideDeployDialog();
+  }
+});
+</script>
 </body>
 </html>
 

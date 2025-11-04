@@ -16,6 +16,9 @@ class Compiler {
             'core/Logger.php',
             'lang/zh.php',
             'core/Database.php',
+            'core/SecureStorage.php',
+            'core/Validator.php',
+            'core/CSRF.php',
             'core/SSHExecutor.php',
             'core/GitDeployer.php',
             'core/Auth.php',
@@ -84,16 +87,48 @@ class Compiler {
         // 代码清理和压缩
         $this->output = $this->cleanCode($this->output);
         
+        // 检查清理后的内容
+        if (empty($this->output)) {
+            echo "错误: 清理后内容为空！\n";
+            return;
+        }
+        
         if ($this->minify) {
+            $originalLength = strlen($this->output);
             $this->output = $this->minifyPHP($this->output);
+            $minifiedLength = strlen($this->output);
+            echo "压缩前: " . number_format($originalLength) . " bytes\n";
+            echo "压缩后: " . number_format($minifiedLength) . " bytes\n";
+            
+            if (empty($this->output)) {
+                echo "错误: 压缩后内容为空，使用未压缩版本\n";
+                // 重新执行清理（不使用压缩）
+                $this->output = $this->cleanCode($this->output);
+            }
+        }
+        
+        // 最后检查输出内容
+        if (empty($this->output)) {
+            echo "错误: 最终输出内容为空，无法写入文件！\n";
+            return;
         }
         
         // 写入文件
-        file_put_contents(__DIR__ . '/' . $this->outputFile, $this->output);
+        $bytesWritten = file_put_contents(__DIR__ . '/' . $this->outputFile, $this->output);
+        
+        if ($bytesWritten === false) {
+            echo "错误: 无法写入文件 " . $this->outputFile . "\n";
+            return;
+        }
         
         $size = filesize(__DIR__ . '/' . $this->outputFile);
+        if ($size === false) {
+            echo "警告: 无法获取文件大小\n";
+        }
+        
         echo "\n编译完成: " . $this->outputFile . "\n";
         echo "文件大小: " . number_format($size / 1024, 2) . " KB\n";
+        echo "写入字节数: " . number_format($bytesWritten) . " bytes\n";
     }
     
     /**
@@ -333,13 +368,9 @@ class Compiler {
      * 清理代码
      */
     private function cleanCode($content) {
-        // 确保类定义前有空格（但不要破坏已有的类定义）
-        $content = preg_replace('/([^\\s{}])class\\s/', '$1 class ', $content);
-        $content = preg_replace('/([^\\s{}])interface\\s/', '$1 interface ', $content);
-        $content = preg_replace('/([^\\s{}])trait\\s/', '$1 trait ', $content);
-        
-        // 确保 } 和 class/interface/trait 之间有空格
-        $content = preg_replace('/\\}(class|interface|trait)\\s/', '} $1 ', $content);
+        // 只做最基本的清理，避免破坏代码结构
+        // 移除多个连续空行（保留最多一个空行）
+        $content = preg_replace('/\n{3,}/', "\n\n", $content);
         
         // 检查括号平衡（仅检查，不自动修复，避免错误）
         $openCount = substr_count($content, '{');
@@ -357,34 +388,34 @@ class Compiler {
     private function minifyPHP($content) {
         echo "压缩代码（极简模式）...\n";
         
-        // 移除多行注释
-        $content = preg_replace('/\/\*[\s\S]*?\*\//', '', $content);
-        
-        // 移除单行注释（但要小心字符串中的 //）
-        // 先保护字符串中的内容
-        $strings = [];
-        $content = preg_replace_callback('/(["\'])(?:\\\\.|(?!\1).)*\1/', function($m) use (&$strings) {
-            $key = '___STRING_' . count($strings) . '___';
-            $strings[$key] = $m[0];
-            return $key;
-        }, $content);
-        
-        // 移除单行注释（不在字符串中的）
-        $content = preg_replace('/\/\/[^\n]*/', '', $content);
-        
-        // 恢复字符串
-        foreach ($strings as $key => $value) {
-            $content = str_replace($key, $value, $content);
+        if (empty($content)) {
+            echo "警告: 内容为空，跳过压缩\n";
+            return $content;
         }
         
-        // 移除行首行尾空白
-        $content = preg_replace('/^[ \t]+/m', '', $content);
-        $content = preg_replace('/[ \t]+$/m', '', $content);
+        $originalLength = strlen($content);
+        
+        // 只移除真正的多行注释（/* ... */），但要小心字符串中的 /*
+        // 使用更保守的方式：只移除以 /* 开头且不在引号内的注释
+        // 简单处理：移除行首的多行注释块
+        
+        // 先移除以 /* 开头的多行注释（通常是文档注释）
+        // 使用非贪婪匹配，并确保不会匹配到字符串中的内容
+        // 最简单的方式：只移除真正的注释块，不处理字符串
         
         // 移除多个连续空行（保留最多一个空行）
         $content = preg_replace('/\n{3,}/', "\n\n", $content);
         
-        // 不进行其他压缩操作，避免破坏语法
+        $finalLength = strlen($content);
+        if ($finalLength === 0) {
+            echo "错误: 压缩后内容为空！\n";
+            return '';
+        }
+        
+        echo "压缩前: " . number_format($originalLength) . " bytes\n";
+        echo "压缩后: " . number_format($finalLength) . " bytes\n";
+        echo "注意: 已跳过多行注释移除，避免破坏字符串中的 /* */\n";
+        
         return $content;
     }
     

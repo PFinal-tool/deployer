@@ -101,7 +101,7 @@ class Deployer {
             $output = [];
             $output[] = "=== Deployment Started ===";
             $output[] = "Project: {$project['name']}";
-            $output[] = "Branch: {$branch}";
+            $output[] = "Branch/Tag: {$branch}";
             $output[] = "Path: {$project['deploy_path']}";
             $output[] = "";
             

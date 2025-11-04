@@ -29,6 +29,7 @@ require_once __DIR__ . '/../../lang/zh.php';
     <div class="alert<?php echo ($f['type'] ?? '') === 'success' ? ' alert-success' : ''; ?>"><?php echo htmlspecialchars($f['message'] ?? ''); ?></div>
   <?php endif; ?>
   <form method="POST" enctype="multipart/form-data" class="form">
+    <?php echo CSRF::field(); ?>
     <table>
       <thead><tr><th colspan="2"><?php echo $server ? '编辑服务器' : '添加服务器'; ?></th></tr></thead>
       <tbody>

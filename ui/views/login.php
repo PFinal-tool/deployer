@@ -23,6 +23,7 @@ require_once __DIR__ . '/../lang/zh.php';
 
 <div class="wrap">
   <form method="POST" class="form">
+    <?php echo CSRF::field(); ?>
     <table>
       <thead>
         <tr><th colspan="2"><?php echo Lang::get('login'); ?></th></tr>

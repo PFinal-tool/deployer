@@ -1,1 +1,0 @@
-<?php\nclass Test {\n    public function test() {\n        foreach ([1,2,3] as $v) {\n            if (true) {\n                $a = "self::$views[" . $v . "]=base64_decode(" . $v . ");";\n            }\n        }\n    }\n}

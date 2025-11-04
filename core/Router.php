@@ -70,17 +70,33 @@ class Router {
     
     private function handleLogin() {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $username = $_POST['username'] ?? '';
-            $password = $_POST['password'] ?? '';
-            
-            Logger::info("Login attempt: username={$username}");
-            if ($this->auth->login($username, $password)) {
-                Logger::info("Login successful: username={$username}");
-                header('Location: ?action=dashboard');
-                exit;
+            // 验证 CSRF Token
+            if (!CSRF::validate()) {
+                Logger::warning("CSRF validation failed on login");
+                $error = '安全验证失败，请重新提交';
             } else {
-                Logger::warning("Login failed: username={$username}");
-                $error = '用户名或密码错误';
+                try {
+                    $username = Validator::validateUsername($_POST['username'] ?? '');
+                    $password = $_POST['password'] ?? '';
+                    
+                    if (empty($password)) {
+                        throw new InvalidArgumentException("密码不能为空");
+                    }
+                    
+                    Logger::info("Login attempt: username={$username}");
+                    if ($this->auth->login($username, $password)) {
+                        Logger::info("Login successful: username={$username}");
+                        CSRF::regenerateToken(); // 登录成功后重新生成 token
+                        header('Location: ?action=dashboard');
+                        exit;
+                    } else {
+                        Logger::warning("Login failed: username={$username}");
+                        $error = '用户名或密码错误';
+                    }
+                } catch (InvalidArgumentException $e) {
+                    Logger::warning("Login validation failed: " . $e->getMessage());
+                    $error = $e->getMessage();
+                }
             }
         }
         
@@ -278,53 +294,81 @@ class Router {
         $project = null;
         
         if ($id) {
-            $project = $db->fetchOne("SELECT * FROM projects WHERE id = ?", [$id]);
+            try {
+                $validatedId = Validator::validateProjectId($id);
+                $project = $db->fetchOne("SELECT * FROM projects WHERE id = ?", [$validatedId]);
+            } catch (InvalidArgumentException $e) {
+                Logger::warning("Invalid project ID: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的项目 ID'];
+                header('Location: ?action=projects');
+                exit;
+            }
         }
         
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $data = [
-                'name' => $_POST['name'] ?? '',
-                'repo_url' => $_POST['repo_url'] ?? '',
-                'branch' => $_POST['branch'] ?? 'master',
-                'deploy_path' => $_POST['deploy_path'] ?? '',
-                'server_id' => $_POST['server_id'] ?? 0,
-                'git_username' => trim($_POST['git_username'] ?? '') ?: null,
-                'pre_deploy_script' => $_POST['pre_deploy_script'] ?? '',
-                'post_deploy_script' => $_POST['post_deploy_script'] ?? '',
-                'webhook_enabled' => isset($_POST['webhook_enabled']) ? 1 : 0,
-                'updated_at' => date('Y-m-d H:i:s')
-            ];
+            // 验证 CSRF Token
+            if (!CSRF::validate()) {
+                Logger::warning("CSRF validation failed on project edit");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
+                header('Location: ?action=projects');
+                exit;
+            }
             
-            // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
-            $gitPassword = trim($_POST['git_password'] ?? '');
-            if ($id && $project) {
-                // 编辑模式：如果密码字段为空，保留旧密码
-                if ($gitPassword === '') {
-                    $data['git_password'] = $project['git_password'] ?? null;
-                    Logger::debug("Project edit: keeping old git_password (empty field provided)");
+            try {
+                // 验证输入参数
+                $data = [
+                    'name' => Validator::sanitizeString($_POST['name'] ?? '', 255, false),
+                    'repo_url' => Validator::validateRepoUrl($_POST['repo_url'] ?? ''),
+                    'branch' => Validator::validateBranch($_POST['branch'] ?? 'master'),
+                    'deploy_path' => Validator::validateDeployPath($_POST['deploy_path'] ?? ''),
+                    'server_id' => Validator::validateServerId($_POST['server_id'] ?? 0),
+                    'git_username' => !empty(trim($_POST['git_username'] ?? '')) ? Validator::sanitizeString(trim($_POST['git_username']), 255, true) : null,
+                    'pre_deploy_script' => Validator::sanitizeString($_POST['pre_deploy_script'] ?? '', 10000, true),
+                    'post_deploy_script' => Validator::sanitizeString($_POST['post_deploy_script'] ?? '', 10000, true),
+                    'webhook_enabled' => isset($_POST['webhook_enabled']) ? 1 : 0,
+                    'updated_at' => date('Y-m-d H:i:s')
+                ];
+                
+                // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
+                $gitPassword = trim($_POST['git_password'] ?? '');
+                if ($id && $project) {
+                    // 编辑模式：如果密码字段为空，保留旧密码
+                    if ($gitPassword === '') {
+                        $data['git_password'] = $project['git_password'] ?? null;
+                        Logger::debug("Project edit: keeping old git_password (empty field provided)");
+                    } else {
+                        $data['git_password'] = $gitPassword; // 将在 Database::insert/update 中加密
+                        Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")");
+                    }
                 } else {
-                    $data['git_password'] = $gitPassword;
-                    Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")");
+                    // 新增模式：如果密码为空，保存 null
+                    $data['git_password'] = $gitPassword ?: null;
+                    Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null"));
                 }
-            } else {
-                // 新增模式：如果密码为空，保存 null
-                $data['git_password'] = $gitPassword ?: null;
-                Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null"));
+                
+                Logger::debug("Project save: git_username=" . ($data['git_username'] ?? 'null') . ", git_password=" . (isset($data['git_password']) && $data['git_password'] ? 'provided' : 'null'));
+                
+                if ($id) {
+                    $validatedId = Validator::validateProjectId($id);
+                    $db->update('projects', $data, 'id = ?', [$validatedId]);
+                    Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
+                } else {
+                    $data['created_at'] = date('Y-m-d H:i:s');
+                    $id = $db->insert('projects', $data);
+                    Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
+                }
+                
+                CSRF::regenerateToken(); // 成功后重新生成 token
+                $_SESSION['flash'] = ['type' => 'success', 'message' => $id ? '项目更新成功' : '项目创建成功'];
+                header('Location: ?action=projects');
+                exit;
+            } catch (InvalidArgumentException $e) {
+                Logger::warning("Project validation failed: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '验证失败: ' . $e->getMessage()];
+            } catch (Exception $e) {
+                Logger::error("Project save failed: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '保存失败: ' . $e->getMessage()];
             }
-            
-            Logger::debug("Project save: git_username=" . ($data['git_username'] ?? 'null') . ", git_password=" . (isset($data['git_password']) && $data['git_password'] ? 'provided' : 'null'));
-            
-            if ($id) {
-                $db->update('projects', $data, 'id = ?', [$id]);
-                Logger::info("Project updated: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
-            } else {
-                $data['created_at'] = date('Y-m-d H:i:s');
-                $id = $db->insert('projects', $data);
-                Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
-            }
-            
-            header('Location: ?action=projects');
-            exit;
         }
         
         $servers = $db->fetchAll("SELECT * FROM servers ORDER BY id DESC");
@@ -332,10 +376,23 @@ class Router {
     }
     
     private function handleProjectDelete() {
-        $id = $_GET['id'] ?? null;
-        if ($id) {
+        try {
+            // 验证 CSRF Token（如果是 POST 请求）
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
+                Logger::warning("CSRF validation failed on project delete");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败'];
+                header('Location: ?action=projects');
+                exit;
+            }
+            
+            $id = Validator::validateProjectId($_GET['id'] ?? null);
             $db = Database::getInstance();
             $db->delete('projects', 'id = ?', [$id]);
+            Logger::info("Project deleted: id={$id}");
+            $_SESSION['flash'] = ['type' => 'success', 'message' => '项目删除成功'];
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("Project delete validation failed: " . $e->getMessage());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的项目 ID'];
         }
         header('Location: ?action=projects');
         exit;
@@ -353,148 +410,209 @@ class Router {
         $server = null;
         
         if ($id) {
-            $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$id]);
-            if ($server && isset($server['key_content'])) {
-                unset($server['key_content']); // 安全：不显示密钥内容
+            try {
+                $validatedId = Validator::validateServerId($id);
+                $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$validatedId]);
+                if ($server && isset($server['key_content'])) {
+                    unset($server['key_content']); // 安全：不显示密钥内容
+                }
+            } catch (InvalidArgumentException $e) {
+                Logger::warning("Invalid server ID: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的服务器 ID'];
+                header('Location: ?action=servers');
+                exit;
             }
         }
         
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $data = [
-                'name' => $_POST['name'] ?? '',
-                'host' => $_POST['host'] ?? '',
-                'port' => intval($_POST['port'] ?? 22),
-                'username' => $_POST['username'] ?? '',
-                'key_path' => $_POST['key_path'] ?? '',
-                'updated_at' => date('Y-m-d H:i:s')
-            ];
+            // 验证 CSRF Token
+            if (!CSRF::validate()) {
+                Logger::warning("CSRF validation failed on server edit");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
+                header('Location: ?action=servers');
+                exit;
+            }
             
-            // 处理密码：编辑时如果密码字段为空则保留旧密码，新增时如果为空则保存 null
-            $hasNewPassword = false;
-            if ($id && $server) {
-                // 编辑模式：如果密码字段为空字符串，保留旧密码；如果不为空，更新为新密码
-                $password = trim($_POST['password'] ?? '');
-                if ($password !== '') {
-                    $data['password'] = $password;
-                    $hasNewPassword = true;
-                    Logger::debug("Password field updated, length=" . strlen($password));
+            try {
+                // 验证输入参数
+                $data = [
+                    'name' => Validator::sanitizeString($_POST['name'] ?? '', 255, false),
+                    'host' => Validator::validateHost($_POST['host'] ?? ''),
+                    'port' => Validator::validatePort($_POST['port'] ?? 22),
+                    'username' => Validator::validateUsername($_POST['username'] ?? ''),
+                    'key_path' => Validator::sanitizeString($_POST['key_path'] ?? '', 500, true),
+                    'updated_at' => date('Y-m-d H:i:s')
+                ];
+                
+                // 处理密码：编辑时如果密码字段为空则保留旧密码，新增时如果为空则保存 null
+                $hasNewPassword = false;
+                if ($id && $server) {
+                    // 编辑模式：如果密码字段为空字符串，保留旧密码；如果不为空，更新为新密码
+                    $password = trim($_POST['password'] ?? '');
+                    if ($password !== '') {
+                        $data['password'] = $password; // 将在 Database::insert/update 中加密
+                        $hasNewPassword = true;
+                        Logger::debug("Password field updated, length=" . strlen($password));
+                    } else {
+                        // 保留原有密码
+                        $data['password'] = $server['password'] ?? null;
+                        $hasNewPassword = isset($server['password']) && $server['password'] !== null && $server['password'] !== '';
+                        Logger::debug("Password field empty, keeping old password, old_password_length=" . (isset($server['password']) && $server['password'] !== null ? strlen($server['password']) : 0));
+                    }
                 } else {
-                    // 保留原有密码
-                    $data['password'] = $server['password'] ?? null;
-                    $hasNewPassword = isset($server['password']) && $server['password'] !== null && $server['password'] !== '';
-                    Logger::debug("Password field empty, keeping old password, old_password_length=" . (isset($server['password']) && $server['password'] !== null ? strlen($server['password']) : 0));
+                    // 新增模式：如果密码字段不为空，保存密码；否则保存 null
+                    $password = trim($_POST['password'] ?? '');
+                    $data['password'] = $password !== '' ? $password : null;
+                    $hasNewPassword = $password !== '';
+                    Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null'));
                 }
-            } else {
-                // 新增模式：如果密码字段不为空，保存密码；否则保存 null
-                $password = trim($_POST['password'] ?? '');
-                $data['password'] = $password !== '' ? $password : null;
-                $hasNewPassword = $password !== '';
-                Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null'));
-            }
-            
-            // 如果有密码，清空密钥（密码认证优先）
-            if ($hasNewPassword) {
-                $data['key_path'] = '';
-                $data['key_content'] = null;
-                Logger::info("Password provided, clearing key_path and key_content (password auth takes priority)");
-            } else {
-                // 如果有上传密钥文件
-                if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) {
-                    $keyContent = file_get_contents($_FILES['key_file']['tmp_name']);
-                    $data['key_content'] = base64_encode($keyContent);
-                    Logger::info("Server edit: uploaded key file, size=" . strlen($keyContent) . " bytes");
-                } elseif ($id && $server && !empty($server['key_content'])) {
-                    // 保留原有密钥
-                    $data['key_content'] = $server['key_content'];
+                
+                // 如果有密码，清空密钥（密码认证优先）
+                if ($hasNewPassword) {
+                    $data['key_path'] = '';
+                    $data['key_content'] = null;
+                    Logger::info("Password provided, clearing key_path and key_content (password auth takes priority)");
+                } else {
+                    // 如果有上传密钥文件
+                    if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) {
+                        $keyContent = file_get_contents($_FILES['key_file']['tmp_name']);
+                        $data['key_content'] = base64_encode($keyContent); // 将在 Database::insert/update 中加密
+                        Logger::info("Server edit: uploaded key file, size=" . strlen($keyContent) . " bytes");
+                    } elseif ($id && $server && !empty($server['key_content'])) {
+                        // 保留原有密钥
+                        $data['key_content'] = $server['key_content'];
+                    }
                 }
+                
+                if ($id) {
+                    $validatedId = Validator::validateServerId($id);
+                    Logger::info("Updating server: id={$validatedId}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
+                    $db->update('servers', $data, 'id = ?', [$validatedId]);
+                } else {
+                    Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
+                    $data['created_at'] = date('Y-m-d H:i:s');
+                    $id = $db->insert('servers', $data);
+                }
+                
+                CSRF::regenerateToken(); // 成功后重新生成 token
+                $_SESSION['flash'] = ['type' => 'success', 'message' => $id ? '服务器更新成功' : '服务器创建成功'];
+                header('Location: ?action=servers');
+                exit;
+            } catch (InvalidArgumentException $e) {
+                Logger::warning("Server validation failed: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '验证失败: ' . $e->getMessage()];
+            } catch (Exception $e) {
+                Logger::error("Server save failed: " . $e->getMessage());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '保存失败: ' . $e->getMessage()];
             }
-            
-            if ($id) {
-                Logger::info("Updating server: id={$id}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
-                $db->update('servers', $data, 'id = ?', [$id]);
-            } else {
-                Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
-                $data['created_at'] = date('Y-m-d H:i:s');
-                $id = $db->insert('servers', $data);
-            }
-            
-            header('Location: ?action=servers');
-            exit;
         }
         
+        $servers = $db->fetchAll("SELECT * FROM servers ORDER BY id DESC");
         $this->renderServerEdit($server);
     }
     
     private function handleServerDelete() {
-        $id = $_GET['id'] ?? null;
-        if ($id) {
+        try {
+            // 验证 CSRF Token（如果是 POST 请求）
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
+                Logger::warning("CSRF validation failed on server delete");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败'];
+                header('Location: ?action=servers');
+                exit;
+            }
+            
+            $id = Validator::validateServerId($_GET['id'] ?? null);
             Logger::info("Deleting server: id={$id}");
             $db = Database::getInstance();
             $db->delete('servers', 'id = ?', [$id]);
+            $_SESSION['flash'] = ['type' => 'success', 'message' => '服务器删除成功'];
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("Server delete validation failed: " . $e->getMessage());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的服务器 ID'];
         }
         header('Location: ?action=servers');
         exit;
     }
     
     private function handleServerTest() {
-        $id = $_GET['id'] ?? null;
-        if (!$id) {
-            Logger::warning("Server test failed: missing server ID");
-            $_SESSION['flash'] = ['type' => 'error', 'message' => '缺少服务器 ID'];
-            header('Location: ?action=servers');
-            exit;
-        }
-        $db = Database::getInstance();
-        $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$id]);
-        if (!$server) {
-            Logger::warning("Server test failed: server not found, id={$id}");
-            $_SESSION['flash'] = ['type' => 'error', 'message' => '服务器不存在'];
-            header('Location: ?action=servers');
-            exit;
-        }
-        Logger::info("Testing server connection: id={$id}, name={$server['name']}, host={$server['host']}:{$server['port']}, user={$server['username']}");
-        Logger::debug("Server password check: has_password=" . (isset($server['password']) && $server['password'] !== null && $server['password'] !== '' ? 'yes' : 'no') . ", password_length=" . (isset($server['password']) ? strlen($server['password']) : 0));
         try {
-            $sshConfig = [
-                'host' => $server['host'],
-                'port' => $server['port'],
-                'username' => $server['username'],
-                'key_path' => $server['key_path'] ?? '',
-                'key_content' => $server['key_content'] ?? null,
-                'password' => $server['password'] ?? null, // 直接使用密码，不在这里隐藏
-            ];
-            // 记录配置（隐藏密码用于日志）
-            $logConfig = $sshConfig;
-            $logConfig['password'] = isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? '***[HIDDEN]' : null;
-            Logger::debug("SSH config (password hidden for security): " . json_encode($logConfig));
-            Logger::debug("Password actually used: " . (isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? 'present(' . strlen($sshConfig['password']) . ' chars)' : 'not set'));
-            $exec = new SSHExecutor($sshConfig);
-            $ok = $exec->testConnection();
-            if ($ok) {
-                Logger::info("Server connection test successful: id={$id}, name={$server['name']}");
-                $_SESSION['flash'] = ['type' => 'success', 'message' => '连接成功'];
-            } else {
-                Logger::error("Server connection test failed: id={$id}, name={$server['name']}");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败'];
+            $id = Validator::validateServerId($_GET['id'] ?? null);
+            $db = Database::getInstance();
+            $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$id]);
+            
+            if (!$server) {
+                Logger::warning("Server test failed: server not found, id={$id}");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '服务器不存在'];
+                header('Location: ?action=servers');
+                exit;
             }
-        } catch (Exception $e) {
-            Logger::error("Server connection test exception: id={$id}, name={$server['name']}, error=" . $e->getMessage() . ", trace=" . $e->getTraceAsString());
-            $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败：' . $e->getMessage()];
+            
+            Logger::info("Testing server connection: id={$id}, name={$server['name']}, host={$server['host']}:{$server['port']}, user={$server['username']}");
+            Logger::debug("Server password check: has_password=" . (isset($server['password']) && $server['password'] !== null && $server['password'] !== '' ? 'yes' : 'no') . ", password_length=" . (isset($server['password']) ? strlen($server['password']) : 0));
+            
+            try {
+                $sshConfig = [
+                    'host' => $server['host'],
+                    'port' => $server['port'],
+                    'username' => $server['username'],
+                    'key_path' => $server['key_path'] ?? '',
+                    'key_content' => $server['key_content'] ?? null,
+                    'password' => $server['password'] ?? null, // 直接使用密码，不在这里隐藏
+                ];
+                // 记录配置（隐藏密码用于日志）
+                $logConfig = $sshConfig;
+                $logConfig['password'] = isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? '***[HIDDEN]' : null;
+                Logger::debug("SSH config (password hidden for security): " . json_encode($logConfig));
+                Logger::debug("Password actually used: " . (isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? 'present(' . strlen($sshConfig['password']) . ' chars)' : 'not set'));
+                $exec = new SSHExecutor($sshConfig);
+                $ok = $exec->testConnection();
+                if ($ok) {
+                    Logger::info("Server connection test successful: id={$id}, name={$server['name']}");
+                    $_SESSION['flash'] = ['type' => 'success', 'message' => '连接成功'];
+                } else {
+                    Logger::error("Server connection test failed: id={$id}, name={$server['name']}");
+                    $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败'];
+                }
+            } catch (Exception $e) {
+                Logger::error("Server connection test exception: id={$id}, name={$server['name']}, error=" . $e->getMessage() . ", trace=" . $e->getTraceAsString());
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败：' . $e->getMessage()];
+            }
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("Server test validation failed: " . $e->getMessage());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的服务器 ID'];
         }
         header('Location: ?action=servers');
         exit;
     }
     
     private function handleDeploy() {
-        $projectId = $_GET['id'] ?? null;
-        $branch = $_GET['branch'] ?? null;
-        
-        if (!$projectId || !$branch) {
-            header('Location: ?action=projects');
-            exit;
-        }
-        
         try {
+            // 验证输入参数
+            $projectId = Validator::validateProjectId($_GET['id'] ?? null);
+            
+            // 如果指定了 branch 参数，使用指定的；否则使用项目默认的
+            $branch = null;
+            if (isset($_GET['branch']) && !empty(trim($_GET['branch']))) {
+                $branch = Validator::validateBranch(trim($_GET['branch']));
+            } else {
+                // 获取项目默认分支
+                $db = Database::getInstance();
+                $project = $db->fetchOne("SELECT branch FROM projects WHERE id = ?", [$projectId]);
+                if ($project) {
+                    $branch = $project['branch'];
+                } else {
+                    throw new InvalidArgumentException("项目不存在");
+                }
+            }
+            
+            // 验证 CSRF Token（如果是 POST 请求）
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
+                Logger::warning("CSRF validation failed on deploy");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
+                header('Location: ?action=projects');
+                exit;
+            }
+            
             // 同步执行部署
             $deployer = new Deployer();
             $result = $deployer->deploy($projectId, $branch);
@@ -504,12 +622,17 @@ class Router {
             } else {
                 $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')];
             }
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("Deploy validation failed: " . $e->getMessage());
+            $_SESSION['flash'] = ['type' => 'error', 'message' => '参数错误: ' . $e->getMessage()];
+            header('Location: ?action=projects');
+            exit;
         } catch (Exception $e) {
             Logger::error("Deployment handler exception: " . $e->getMessage());
             $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . $e->getMessage()];
         }
         
-        header('Location: ?action=deployments&project_id=' . $projectId);
+        header('Location: ?action=deployments&project_id=' . ($projectId ?? ''));
         exit;
     }
     
@@ -556,54 +679,54 @@ class Router {
     }
     
     private function apiDeployStatus() {
-        $deploymentId = $_GET['deployment_id'] ?? null;
-        if (!$deploymentId) {
-            $this->renderJson(['error' => 'Missing deployment_id'], 400);
-            return;
+        try {
+            $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
+            $db = Database::getInstance();
+            $deployment = $db->fetchOne("SELECT * FROM deployments WHERE id = ?", [$deploymentId]);
+            
+            $this->renderJson($deployment ?: ['error' => 'Not found'], $deployment ? 200 : 404);
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("API deploy status validation failed: " . $e->getMessage());
+            $this->renderJson(['error' => $e->getMessage()], 400);
         }
-        
-        $db = Database::getInstance();
-        $deployment = $db->fetchOne("SELECT * FROM deployments WHERE id = ?", [$deploymentId]);
-        
-        $this->renderJson($deployment ?: ['error' => 'Not found'], $deployment ? 200 : 404);
     }
     
     private function apiDeployLog() {
-        $deploymentId = $_GET['deployment_id'] ?? null;
-        if (!$deploymentId) {
-            $this->renderJson(['error' => 'Missing deployment_id'], 400);
-            return;
-        }
-        
-        $db = Database::getInstance();
-        $deployment = $db->fetchOne("SELECT output, error, status FROM deployments WHERE id = ?", [$deploymentId]);
-        
-        if (!$deployment) {
-            $this->renderJson(['error' => 'Not found'], 404);
-            return;
-        }
-        
-        // 组合输出和错误信息
-        $logContent = '';
-        if (!empty($deployment['output'])) {
-            $logContent .= $deployment['output'];
-        }
-        if (!empty($deployment['error'])) {
-            if (!empty($logContent)) {
-                $logContent .= "\n\n";
+        try {
+            $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
+            $db = Database::getInstance();
+            $deployment = $db->fetchOne("SELECT output, error, status FROM deployments WHERE id = ?", [$deploymentId]);
+            
+            if (!$deployment) {
+                $this->renderJson(['error' => 'Not found'], 404);
+                return;
             }
-            $logContent .= "错误信息: " . $deployment['error'];
+            
+            // 组合输出和错误信息
+            $logContent = '';
+            if (!empty($deployment['output'])) {
+                $logContent .= $deployment['output'];
+            }
+            if (!empty($deployment['error'])) {
+                if (!empty($logContent)) {
+                    $logContent .= "\n\n";
+                }
+                $logContent .= "错误信息: " . $deployment['error'];
+            }
+            
+            if (empty($logContent)) {
+                $logContent = '暂无日志';
+            }
+            
+            $this->renderJson([
+                'output' => $logContent,
+                'error' => $deployment['error'] ?? null,
+                'status' => $deployment['status'] ?? 'unknown'
+            ]);
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("API deploy log validation failed: " . $e->getMessage());
+            $this->renderJson(['error' => $e->getMessage()], 400);
         }
-        
-        if (empty($logContent)) {
-            $logContent = '暂无日志';
-        }
-        
-        $this->renderJson([
-            'output' => $logContent,
-            'error' => $deployment['error'] ?? null,
-            'status' => $deployment['status'] ?? 'unknown'
-        ]);
     }
     
     // 渲染方法

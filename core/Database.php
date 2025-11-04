@@ -130,15 +130,71 @@ class Database {
         return $stmt;
     }
     
-    public function fetchAll($sql, $params = []) {
-        return $this->query($sql, $params)->fetchAll();
+    public function fetchOne($sql, $params = []) {
+        $result = $this->query($sql, $params)->fetch();
+        
+        // 如果是查询结果，解密敏感字段
+        if ($result && is_array($result)) {
+            // 根据表结构判断需要解密的字段
+            if (isset($result['password']) || isset($result['key_content'])) {
+                // 可能是 servers 表
+                $decryptFields = [];
+                if (isset($result['password'])) $decryptFields[] = 'password';
+                if (isset($result['key_content'])) $decryptFields[] = 'key_content';
+                if (class_exists('SecureStorage')) {
+                    $result = SecureStorage::decryptFields($result, $decryptFields);
+                }
+            } elseif (isset($result['git_password'])) {
+                // 可能是 projects 表
+                if (class_exists('SecureStorage')) {
+                    $result = SecureStorage::decryptFields($result, ['git_password']);
+                }
+            }
+        }
+        
+        return $result;
     }
     
-    public function fetchOne($sql, $params = []) {
-        return $this->query($sql, $params)->fetch();
+    public function fetchAll($sql, $params = []) {
+        $results = $this->query($sql, $params)->fetchAll();
+        
+        // 批量解密敏感字段
+        if (!empty($results) && is_array($results[0])) {
+            $firstRow = $results[0];
+            $decryptFields = [];
+            
+            if (isset($firstRow['password']) || isset($firstRow['key_content'])) {
+                if (isset($firstRow['password'])) $decryptFields[] = 'password';
+                if (isset($firstRow['key_content'])) $decryptFields[] = 'key_content';
+            } elseif (isset($firstRow['git_password'])) {
+                $decryptFields[] = 'git_password';
+            }
+            
+            if (!empty($decryptFields) && class_exists('SecureStorage')) {
+                foreach ($results as &$row) {
+                    $row = SecureStorage::decryptFields($row, $decryptFields);
+                }
+                unset($row);
+            }
+        }
+        
+        return $results;
     }
     
     public function insert($table, $data) {
+        // 加密敏感字段
+        if ($table === 'servers') {
+            $encryptFields = ['password', 'key_content'];
+            if (class_exists('SecureStorage')) {
+                $data = SecureStorage::encryptFields($data, $encryptFields);
+            }
+        } elseif ($table === 'projects') {
+            $encryptFields = ['git_password'];
+            if (class_exists('SecureStorage')) {
+                $data = SecureStorage::encryptFields($data, $encryptFields);
+            }
+        }
+        
         $fields = array_keys($data);
         $placeholders = ':' . implode(', :', $fields);
         $fieldsStr = implode(', ', $fields);
@@ -151,6 +207,19 @@ class Database {
     }
     
     public function update($table, $data, $where, $whereParams = []) {
+        // 加密敏感字段
+        if ($table === 'servers') {
+            $encryptFields = ['password', 'key_content'];
+            if (class_exists('SecureStorage')) {
+                $data = SecureStorage::encryptFields($data, $encryptFields);
+            }
+        } elseif ($table === 'projects') {
+            $encryptFields = ['git_password'];
+            if (class_exists('SecureStorage')) {
+                $data = SecureStorage::encryptFields($data, $encryptFields);
+            }
+        }
+        
         $setParts = [];
         foreach (array_keys($data) as $field) {
             $setParts[] = "{$field} = :{$field}";
