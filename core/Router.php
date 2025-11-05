@@ -4,79 +4,52 @@
  */
 class Router {
     private $auth;
-    
     public function __construct() {
         $this->auth = new Auth();
     }
-    
     public function handle() {
-        $action = $_GET['action'] ?? 'dashboard';
-        
+        $action = $_GET['action'] ?? 'dashboard';   
         // 公开路由（无需登录）
-        $publicActions = ['login', 'logout', 'api'];
-        
-        // 需要登录的路由
-        if (!in_array($action, $publicActions) && $action !== 'login') {
-            $this->auth->requireLogin();
-        }
-        
+        $publicActions = ['login', 'logout'];
+        // 需要登录的路由（包括 API）
+        if (!in_array($action, $publicActions) && $action !== 'login') {$this->auth->requireLogin();}
         // 如果使用默认密码，只能访问修改密码页面和退出登录
-        if ($this->auth->isLoggedIn() && $this->auth->isDefaultPassword() && $action !== 'change_password' && $action !== 'logout') {
-            header('Location: ?action=change_password&required=1');
-            exit;
-        }
-        
+        if ($this->auth->isLoggedIn() && $this->auth->isDefaultPassword() && $action !== 'change_password' && $action !== 'logout') {header('Location: ?action=change_password&required=1');exit;}
         switch ($action) {
             case 'login':
-                $this->handleLogin();
-                break;
+                $this->handleLogin();break;
             case 'logout':
-                $this->handleLogout();
-                break;
+                $this->handleLogout();break;
             case 'dashboard':
-                $this->handleDashboard();
-                break;
+                $this->handleDashboard();break;
             case 'projects':
-                $this->handleProjects();
-                break;
+                $this->handleProjects();break;
             case 'project_edit':
-                $this->handleProjectEdit();
-                break;
+                $this->handleProjectEdit();break;
             case 'project_delete':
-                $this->handleProjectDelete();
-                break;
+                $this->handleProjectDelete();break;
             case 'servers':
-                $this->handleServers();
-                break;
+                $this->handleServers();break;
             case 'server_edit':
-                $this->handleServerEdit();
-                break;
+                $this->handleServerEdit();break;
             case 'server_delete':
-                $this->handleServerDelete();
-                break;
+                $this->handleServerDelete();break;
             case 'server_test':
-                $this->handleServerTest();
-                break;
+                $this->handleServerTest();break;
             case 'deploy':
-                $this->handleDeploy();
-                break;
+                $this->handleDeploy();break;
             case 'deployments':
-                $this->handleDeployments();
-                break;
+                $this->handleDeployments();break;
             case 'webhook':
-                $this->handleWebhook();
-                break;
+                $this->handleWebhook();break;
             case 'api':
-                $this->handleApi();
-                break;
+                $this->handleApi();break;
             case 'change_password':
-                $this->handleChangePassword();
-                break;
+                $this->handleChangePassword();break;
             default:
                 $this->handleDashboard();
         }
     }
-    
     private function handleLogin() {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // 验证 CSRF Token
@@ -87,24 +60,14 @@ class Router {
                 try {
                     $username = Validator::validateUsername($_POST['username'] ?? '');
                     $password = $_POST['password'] ?? '';
-                    
-                    if (empty($password)) {
-                        throw new InvalidArgumentException("密码不能为空");
-                    }
-                    
+                    if (empty($password)) {throw new InvalidArgumentException("密码不能为空");}
                     Logger::info("Login attempt: username={$username}");
                     if ($this->auth->login($username, $password)) {
                         Logger::info("Login successful: username={$username}");
                         CSRF::regenerateToken(); // 登录成功后重新生成 token
-                        
                         // 检查是否使用默认密码，如果是则跳转到修改密码页面
-                        if ($this->auth->isDefaultPassword()) {
-                            header('Location: ?action=change_password&required=1');
-                            exit;
-                        }
-                        
-                        header('Location: ?action=dashboard');
-                        exit;
+                        if ($this->auth->isDefaultPassword()) {header('Location: ?action=change_password&required=1');exit;}
+                        header('Location: ?action=dashboard');exit;
                     } else {
                         Logger::warning("Login failed: username={$username}");
                         $error = '用户名或密码错误';
@@ -115,17 +78,12 @@ class Router {
                 }
             }
         }
-        
         $this->renderLogin($error ?? null);
     }
-    
     private function handleLogout() {
         Logger::info("User logout");
-        $this->auth->logout();
-        header('Location: ?action=login');
-        exit;
+        $this->auth->logout();header('Location: ?action=login');exit;
     }
-    
     private function handleDashboard() {
         // 检查是否使用默认密码，如果是则强制跳转到修改密码页面
         if ($this->auth->isDefaultPassword()) {
@@ -142,13 +100,12 @@ class Router {
             ORDER BY d.started_at DESC 
             LIMIT 10
         ");
-        
         // 环境检测
         $envCheck = $this->checkEnvironment();
         
         $this->renderDashboard($projects, $recentDeployments, $envCheck);
     }
-    
+
     /**
      * 检查 sshpass 是否可用（用于环境检测）
      */
@@ -192,13 +149,12 @@ class Router {
         
         return '';
     }
-    
+
     /**
      * 环境检测
      */
     private function checkEnvironment() {
         $checks = [];
-        
         // PHP 版本
         $phpVersion = PHP_VERSION;
         $phpVersionOk = version_compare($phpVersion, '7.4.0', '>=');
@@ -208,7 +164,6 @@ class Router {
             'status' => $phpVersionOk ? 'ok' : 'error',
             'message' => $phpVersionOk ? '版本符合要求' : '需要 PHP 7.4 或更高版本'
         ];
-        
         // PDO 扩展
         $pdoExists = extension_loaded('pdo');
         $checks[] = [
@@ -217,7 +172,6 @@ class Router {
             'status' => $pdoExists ? 'ok' : 'error',
             'message' => $pdoExists ? '' : '需要安装 PDO 扩展'
         ];
-        
         // SQLite PDO 驱动
         $pdoSqliteExists = extension_loaded('pdo_sqlite');
         $checks[] = [
@@ -226,7 +180,6 @@ class Router {
             'status' => $pdoSqliteExists ? 'ok' : 'error',
             'message' => $pdoSqliteExists ? '' : '需要安装 pdo_sqlite 扩展'
         ];
-        
         // sshpass 工具
         $sshpassPath = $this->checkSshpassForEnv();
         $sshpassExists = $sshpassPath !== '';
@@ -236,7 +189,6 @@ class Router {
             'status' => $sshpassExists ? 'ok' : 'warning',
             'message' => $sshpassExists ? ($sshpassPath !== 'sshpass' ? "路径: {$sshpassPath}" : '') : '如需使用密码认证，请安装 sshpass'
         ];
-        
         // Git 工具
         $gitPath = trim(shell_exec('command -v git') ?? '');
         $gitExists = $gitPath !== '';
@@ -246,7 +198,6 @@ class Router {
             'status' => $gitExists ? 'ok' : 'warning',
             'message' => $gitExists ? '' : '需要 Git 工具用于代码部署'
         ];
-        
         // SSH 客户端
         $sshPath = trim(shell_exec('command -v ssh') ?? '');
         $sshExists = $sshPath !== '';
@@ -256,7 +207,6 @@ class Router {
             'status' => $sshExists ? 'ok' : 'error',
             'message' => $sshExists ? '' : '需要 SSH 客户端'
         ];
-        
         // 存储目录权限
         $storageDir = __DIR__ . '/../storage';
         $logsDir = $storageDir . '/logs';
@@ -268,7 +218,6 @@ class Router {
             'status' => $storageWritable ? 'ok' : 'error',
             'message' => $storageWritable ? '' : 'storage 目录需要可写权限'
         ];
-        
         // 数据库连接
         try {
             $db = Database::getInstance();
@@ -285,7 +234,6 @@ class Router {
             'status' => $dbOk ? 'ok' : 'error',
             'message' => $dbMessage
         ];
-        
         // 时区设置
         $timezone = date_default_timezone_get();
         $checks[] = [
@@ -297,7 +245,7 @@ class Router {
         
         return $checks;
     }
-    
+
     private function handleProjects() {
         $db = Database::getInstance();
         $projects = $db->fetchAll("
@@ -309,12 +257,11 @@ class Router {
         
         $this->renderProjects($projects);
     }
-    
+
     private function handleProjectEdit() {
         $db = Database::getInstance();
         $id = $_GET['id'] ?? null;
         $project = null;
-        
         if ($id) {
             try {
                 $validatedId = Validator::validateProjectId($id);
@@ -335,7 +282,6 @@ class Router {
                 header('Location: ?action=projects');
                 exit;
             }
-            
             try {
                 // 验证输入参数
                 $data = [
@@ -350,7 +296,6 @@ class Router {
                     'webhook_enabled' => isset($_POST['webhook_enabled']) ? 1 : 0,
                     'updated_at' => date('Y-m-d H:i:s')
                 ];
-                
                 // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
                 $gitPassword = trim($_POST['git_password'] ?? '');
                 if ($id && $project) {
@@ -396,7 +341,7 @@ class Router {
         $servers = $db->fetchAll("SELECT * FROM servers ORDER BY id DESC");
         $this->renderProjectEdit($project, $servers);
     }
-    
+
     private function handleProjectDelete() {
         try {
             // 验证 CSRF Token（如果是 POST 请求）
@@ -419,18 +364,17 @@ class Router {
         header('Location: ?action=projects');
         exit;
     }
-    
+
     private function handleServers() {
         $db = Database::getInstance();
         $servers = $db->fetchAll("SELECT * FROM servers ORDER BY id DESC");
         $this->renderServers($servers);
     }
-    
+
     private function handleServerEdit() {
         $db = Database::getInstance();
         $id = $_GET['id'] ?? null;
         $server = null;
-        
         if ($id) {
             try {
                 $validatedId = Validator::validateServerId($id);
@@ -532,7 +476,7 @@ class Router {
         $servers = $db->fetchAll("SELECT * FROM servers ORDER BY id DESC");
         $this->renderServerEdit($server);
     }
-    
+
     private function handleServerDelete() {
         try {
             // 验证 CSRF Token（如果是 POST 请求）
@@ -555,7 +499,7 @@ class Router {
         header('Location: ?action=servers');
         exit;
     }
-    
+
     private function handleServerTest() {
         try {
             $id = Validator::validateServerId($_GET['id'] ?? null);
@@ -606,8 +550,11 @@ class Router {
         header('Location: ?action=servers');
         exit;
     }
-    
+
     private function handleDeploy() {
+        // 设置执行时间限制（部署可能需要较长时间）
+        set_time_limit(600); // 10 分钟
+        
         try {
             // 验证输入参数
             $projectId = Validator::validateProjectId($_GET['id'] ?? null);
@@ -657,7 +604,7 @@ class Router {
         header('Location: ?action=deployments&project_id=' . ($projectId ?? ''));
         exit;
     }
-    
+
     private function handleDeployments() {
         $db = Database::getInstance();
         $projectId = $_GET['project_id'] ?? null;
@@ -679,12 +626,12 @@ class Router {
         $deployments = $db->fetchAll($sql, $params);
         $this->renderDeployments($deployments);
     }
-    
+
     private function handleWebhook() {
         // Webhook 处理逻辑
         $this->renderJson(['status' => 'ok']);
     }
-    
+
     private function handleChangePassword() {
         // 需要登录才能修改密码
         $this->auth->requireLogin();
@@ -787,8 +734,11 @@ class Router {
         
         $this->renderChangePassword($error, $success, $required);
     }
-    
+
     private function handleApi() {
+        // API 端点需要认证
+        $this->auth->requireLogin();
+        
         $endpoint = $_GET['endpoint'] ?? '';
         
         switch ($endpoint) {
@@ -802,7 +752,7 @@ class Router {
                 $this->renderJson(['error' => 'Invalid endpoint'], 404);
         }
     }
-    
+
     private function apiDeployStatus() {
         try {
             $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
@@ -815,7 +765,7 @@ class Router {
             $this->renderJson(['error' => $e->getMessage()], 400);
         }
     }
-    
+
     private function apiDeployLog() {
         try {
             $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
@@ -853,7 +803,7 @@ class Router {
             $this->renderJson(['error' => $e->getMessage()], 400);
         }
     }
-    
+
     // 渲染方法
     private function renderLogin($error = null) {
         $viewPath = __DIR__ . '/../ui/views/login.php';
@@ -863,7 +813,7 @@ class Router {
             echo "View file not found: login.php";
         }
     }
-    
+
     private function renderDashboard($projects, $deployments, $envCheck = []) {
         $viewPath = __DIR__ . '/../ui/views/dashboard.php';
         if (file_exists($viewPath)) {
@@ -872,7 +822,7 @@ class Router {
             echo "View file not found: dashboard.php";
         }
     }
-    
+
     private function renderProjects($projects) {
         $viewPath = __DIR__ . '/../ui/views/projects.php';
         if (file_exists($viewPath)) {
@@ -881,7 +831,7 @@ class Router {
             echo "View file not found: projects.php";
         }
     }
-    
+
     private function renderProjectEdit($project, $servers) {
         $viewPath = __DIR__ . '/../ui/views/project_edit.php';
         if (file_exists($viewPath)) {
@@ -890,7 +840,7 @@ class Router {
             echo "View file not found: project_edit.php";
         }
     }
-    
+
     private function renderServers($servers) {
         $viewPath = __DIR__ . '/../ui/views/servers.php';
         if (file_exists($viewPath)) {
@@ -899,7 +849,7 @@ class Router {
             echo "View file not found: servers.php";
         }
     }
-    
+
     private function renderServerEdit($server) {
         $viewPath = __DIR__ . '/../ui/views/server_edit.php';
         if (file_exists($viewPath)) {
@@ -908,7 +858,7 @@ class Router {
             echo "View file not found: server_edit.php";
         }
     }
-    
+
     private function renderChangePassword($error = null, $success = false, $required = false) {
         $viewPath = __DIR__ . '/../ui/views/change_password.php';
         if (file_exists($viewPath)) {
@@ -917,7 +867,6 @@ class Router {
             echo "View file not found: change_password.php";
         }
     }
-    
     private function renderDeployments($deployments) {
         $viewPath = __DIR__ . '/../ui/views/deployments.php';
         if (file_exists($viewPath)) {
@@ -926,7 +875,6 @@ class Router {
             echo "View file not found: deployments.php";
         }
     }
-    
     private function renderJson($data, $statusCode = 200) {
         http_response_code($statusCode);
         header('Content-Type: application/json');

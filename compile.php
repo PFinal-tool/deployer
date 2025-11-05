@@ -400,10 +400,10 @@ class Compiler {
     }
     
     /**
-     * PHP 代码压缩（优化模式，安全压缩）
+     * PHP 代码压缩（优化模式，安全压缩，类似 Logger.php 风格）
      */
     private function minifyPHP($content) {
-        echo "压缩代码（优化模式）...\n";
+        echo "压缩代码（Logger.php 风格）...\n";
         
         if (empty($content)) {
             echo "警告: 内容为空，跳过压缩\n";
@@ -412,179 +412,287 @@ class Compiler {
         
         $originalLength = strlen($content);
         
-        // 使用状态机安全地处理字符串和注释
-        $result = '';
-        $inString = false;
-        $stringChar = '';
-        $inComment = false;
-        $commentType = ''; // 'single' 或 'multi'
-        $inRegex = false;
-        $len = strlen($content);
-        $i = 0;
-        
-        while ($i < $len) {
-            $char = $content[$i];
-            $nextChar = ($i + 1 < $len) ? $content[$i + 1] : '';
-            
-            // 处理字符串
-            if (!$inComment && !$inRegex) {
-                // 检查字符串开始
-                if (($char === '"' || $char === "'") && ($i === 0 || $content[$i - 1] !== '\\')) {
-                    if (!$inString) {
-                        $inString = true;
-                        $stringChar = $char;
-                        $result .= $char;
-                        $i++;
-                        continue;
-                    } elseif ($char === $stringChar) {
-                        // 字符串结束
-                        $inString = false;
-                        $stringChar = '';
-                        $result .= $char;
-                        $i++;
-                        continue;
-                    }
-                }
-                
-                // 在字符串内，直接添加字符
-                if ($inString) {
-                    $result .= $char;
-                    $i++;
-                    continue;
-                }
-            }
-            
-            // 检查正则表达式（简化处理：/pattern/flags 格式）
-            if (!$inString && !$inComment && ($char === '/' && $nextChar !== '/' && $nextChar !== '*')) {
-                // 可能是正则表达式开始
-                $prevChar = ($i > 0) ? $content[$i - 1] : '';
-                if (in_array($prevChar, ['=', '(', '[', ',', ':', '!', '&', '|', '?', '{', '}', ';', ' '])) {
-                    $inRegex = true;
-                    $result .= $char;
-                    $i++;
-                    continue;
-                }
-            }
-            
-            if ($inRegex) {
-                $result .= $char;
-                // 检查正则表达式结束（简化：遇到 / 后跟可选标志字符）
-                if ($char === '/' && $i > 0 && $content[$i - 1] !== '\\') {
-                    $afterSlash = '';
-                    $j = $i + 1;
-                    while ($j < $len && preg_match('/[gimsxADSUXJu]/', $content[$j])) {
-                        $afterSlash .= $content[$j];
-                        $j++;
-                    }
-                    // 如果后面是标志字符或结束符，则正则表达式结束
-                    if ($afterSlash !== '' || in_array($content[$j] ?? '', [';', ')', ']', ',', '}', ' ', "\n", "\t"])) {
-                        $result .= $afterSlash;
-                        $i = $j;
-                        $inRegex = false;
-                        continue;
-                    }
-                }
-                $i++;
-                continue;
-            }
-            
-            // 检查注释开始
-            if (!$inString && !$inComment && $char === '/') {
-                if ($nextChar === '/') {
-                    // 单行注释开始
-                    $inComment = true;
-                    $commentType = 'single';
-                    $i += 2;
-                    continue;
-                } elseif ($nextChar === '*') {
-                    // 多行注释开始
-                    $inComment = true;
-                    $commentType = 'multi';
-                    $i += 2;
-                    continue;
-                }
-            }
-            
-            // 处理注释
-            if ($inComment) {
-                if ($commentType === 'single') {
-                    // 单行注释：遇到换行符结束
-                    if ($char === "\n") {
-                        $inComment = false;
-                        $commentType = '';
-                        $result .= "\n"; // 保留换行符
-                    }
-                } elseif ($commentType === 'multi') {
-                    // 多行注释：遇到 */ 结束
-                    if ($char === '*' && $nextChar === '/') {
-                        $inComment = false;
-                        $commentType = '';
-                        $i += 2;
-                        continue;
-                    }
-                }
-                $i++;
-                continue;
-            }
-            
-            // 普通字符
-            $result .= $char;
-            $i++;
-        }
-        
-        // 移除行首行尾空白
-        $lines = explode("\n", $result);
-        $cleanedLines = [];
-        foreach ($lines as $line) {
-            $line = ltrim($line);
-            $line = rtrim($line);
-            $cleanedLines[] = $line;
-        }
-        $result = implode("\n", $cleanedLines);
-        
-        // 移除多个连续空行（保留最多一个空行）
-        $result = preg_replace('/\n{3,}/', "\n\n", $result);
-        
-        // 先保护字符串内容，避免压缩时破坏 SQL 语句等
+        // 先保护所有字符串内容（包括正则表达式中的字符串和 heredoc）
+        // 使用字符级扫描，确保正确匹配所有字符串
         $strings = [];
         $stringIndex = 0;
-        $protectedResult = preg_replace_callback('/(["\'])(?:\\\\.|(?!\1).)*\1/', function($m) use (&$strings, &$stringIndex) {
-            $key = '___PROTECTED_STRING_' . $stringIndex++ . '___';
-            $strings[$key] = $m[0];
-            return $key;
-        }, $result);
         
-        // 如果保护失败，直接使用原结果
-        if ($protectedResult === null || empty($protectedResult)) {
-            $protectedResult = $result;
-            $strings = [];
+        $pos = 0;
+        $len = strlen($content);
+        $protectedContent = '';
+        
+        while ($pos < $len) {
+            // 检查 heredoc/nowdoc 语法 (<<<'IDENTIFIER' 或 <<<IDENTIFIER)
+            if ($pos + 2 < $len && $content[$pos] === '<' && $content[$pos + 1] === '<' && $content[$pos + 2] === '<') {
+                $startPos = $pos;
+                $pos += 3;
+                
+                // 跳过空白字符
+                while ($pos < $len && ($content[$pos] === ' ' || $content[$pos] === "\t")) {
+                    $pos++;
+                }
+                
+                // 检查是否带引号（nowdoc）
+                $isQuoted = false;
+                if ($pos < $len && ($content[$pos] === "'" || $content[$pos] === '"')) {
+                    $isQuoted = true;
+                    $pos++;
+                }
+                
+                // 读取标识符
+                $identifierStart = $pos;
+                while ($pos < $len && preg_match('/[a-zA-Z0-9_]/', $content[$pos])) {
+                    $pos++;
+                }
+                
+                if ($pos === $identifierStart) {
+                    // 不是有效的 heredoc，继续处理
+                    $protectedContent .= substr($content, $startPos, $pos - $startPos);
+                    continue;
+                }
+                
+                $identifier = substr($content, $identifierStart, $pos - $identifierStart);
+                
+                if ($isQuoted && $pos < $len && ($content[$pos] === "'" || $content[$pos] === '"')) {
+                    $pos++;
+                }
+                
+                // 跳过换行符后的空白
+                while ($pos < $len && ($content[$pos] === ' ' || $content[$pos] === "\t" || $content[$pos] === "\r" || $content[$pos] === "\n")) {
+                    $pos++;
+                }
+                
+                // 读取 heredoc 内容直到结束标识符
+                $contentStart = $pos;
+                $identifierLen = strlen($identifier);
+                
+                while ($pos < $len) {
+                    // 检查是否遇到换行符
+                    if ($content[$pos] === "\n" || $content[$pos] === "\r") {
+                        // 检查下一行是否以标识符开始（heredoc 结束标识符必须在行首）
+                        $checkPos = $pos;
+                        if ($content[$pos] === "\r" && $pos + 1 < $len && $content[$pos + 1] === "\n") {
+                            $checkPos += 2; // 跳过 \r\n
+                        } else {
+                            $checkPos++; // 跳过 \n 或单独的 \r
+                        }
+                        
+                        // 跳过空白
+                        while ($checkPos < $len && ($content[$checkPos] === ' ' || $content[$checkPos] === "\t")) {
+                            $checkPos++;
+                        }
+                        
+                        // 检查是否匹配标识符
+                        if ($checkPos + $identifierLen <= $len) {
+                            $match = substr($content, $checkPos, $identifierLen);
+                            if ($match === $identifier) {
+                                $afterIdentifier = $checkPos + $identifierLen;
+                                // 检查标识符后是否有分号或换行或空白
+                                $hasSemicolon = ($afterIdentifier < $len && $content[$afterIdentifier] === ';');
+                                if ($afterIdentifier >= $len || 
+                                    $hasSemicolon ||
+                                    $content[$afterIdentifier] === "\n" || 
+                                    $content[$afterIdentifier] === "\r" ||
+                                    $content[$afterIdentifier] === ' ' ||
+                                    $content[$afterIdentifier] === "\t") {
+                                    // 找到结束标识符，包含分号（如果存在）
+                                    $endPos = $afterIdentifier;
+                                    if ($hasSemicolon) {
+                                        $endPos++; // 包含分号
+                                    }
+                                    $heredocContent = substr($content, $startPos, $endPos - $startPos);
+                                    $key = '___HEREDOC_' . $stringIndex++ . '___';
+                                    $strings[$key] = $heredocContent;
+                                    $protectedContent .= $key;
+                                    $pos = $endPos;
+                                    continue 2;
+                                }
+                            }
+                        }
+                    }
+                    $pos++;
+                }
+                
+                // 如果没有找到结束标识符，保留原内容
+                $heredocContent = substr($content, $startPos, $pos - $startPos);
+                $key = '___HEREDOC_' . $stringIndex++ . '___';
+                $strings[$key] = $heredocContent;
+                $protectedContent .= $key;
+                continue;
+            }
+            
+            // 检查普通字符串开始
+            if ($content[$pos] === '"' || $content[$pos] === "'") {
+                $quote = $content[$pos];
+                $startPos = $pos;
+                $pos++;
+                
+                // 读取字符串内容
+                while ($pos < $len) {
+                    if ($content[$pos] === '\\') {
+                        $pos += 2; // 跳过转义字符
+                        continue;
+                    }
+                    if ($content[$pos] === $quote) {
+                        $pos++;
+                        break;
+                    }
+                    $pos++;
+                }
+                
+                // 提取字符串
+                $stringContent = substr($content, $startPos, $pos - $startPos);
+                $key = '___STRING_' . $stringIndex++ . '___';
+                $strings[$key] = $stringContent;
+                $protectedContent .= $key;
+                continue;
+            }
+            
+            $protectedContent .= $content[$pos];
+            $pos++;
         }
         
-        // 更激进的空格压缩（参考 Adminer，但更保守）
-        // 只在字符串保护成功时才进行压缩
-        if (!empty($strings)) {
-            // 移除分号前后的空格（不在字符串中）
-            $protectedResult = preg_replace('/\s*;\s*/', ';', $protectedResult);
-            // 移除逗号后的空格
-            $protectedResult = preg_replace('/,\s+/', ',', $protectedResult);
-            // 移除花括号前后的空格（但要小心）
-            $protectedResult = preg_replace('/\s*\{\s*/', '{', $protectedResult);
-            $protectedResult = preg_replace('/\s*\}\s*/', '}', $protectedResult);
-            // 移除括号前后的空格
-            $protectedResult = preg_replace('/\s*\(\s*/', '(', $protectedResult);
-            $protectedResult = preg_replace('/\s*\)\s*/', ')', $protectedResult);
-            // 移除方括号前后的空格
-            $protectedResult = preg_replace('/\s*\[\s*/', '[', $protectedResult);
-            $protectedResult = preg_replace('/\s*\]\s*/', ']', $protectedResult);
+        // 移除所有注释（单行和多行）- 在字符串保护之后
+        $protectedContent = preg_replace('/\/\*[\s\S]*?\*\//', '', $protectedContent);
+        $protectedContent = preg_replace('/\/\/[^\n]*/', '', $protectedContent);
+        
+        // 移除多余的空白字符
+        // 移除分号前后的空格
+        $protectedContent = preg_replace('/\s*;\s*/', ';', $protectedContent);
+        // 移除逗号后的空格
+        $protectedContent = preg_replace('/,\s+/', ',', $protectedContent);
+        // 移除操作符前后的空格（但保留必要的）
+        $protectedContent = preg_replace('/\s*([=+\-*\/%<>!&|])\s*=/', '$1=', $protectedContent);
+        $protectedContent = preg_replace('/\s*([=+\-*\/%<>!&|])\s*([^=])/', '$1$2', $protectedContent);
+        // 移除花括号前后的空格和换行
+        $protectedContent = preg_replace('/\s*\{\s*/', '{', $protectedContent);
+        $protectedContent = preg_replace('/\s*\}\s*/', '}', $protectedContent);
+        // 移除括号前后的空格
+        $protectedContent = preg_replace('/\s*\(\s*/', '(', $protectedContent);
+        $protectedContent = preg_replace('/\s*\)\s*/', ')', $protectedContent);
+        // 移除方括号前后的空格
+        $protectedContent = preg_replace('/\s*\[\s*/', '[', $protectedContent);
+        $protectedContent = preg_replace('/\s*\]\s*/', ']', $protectedContent);
+        // 移除点号前后的空格
+        $protectedContent = preg_replace('/\s*\.\s*/', '.', $protectedContent);
+        
+        // 恢复字符串
+        $result = $protectedContent;
+        foreach ($strings as $key => $value) {
+            $result = str_replace($key, $value, $result);
+        }
+        
+        // 压缩方法和类体：类似 Logger.php 的风格
+        // 将每个方法体压缩为单行，方法定义和方法体在同一行
+        $lines = explode("\n", $result);
+        $compressedLines = [];
+        $inMethod = false;
+        $methodBody = '';
+        $methodIndent = '';
+        $braceLevel = 0;
+        $methodDefLine = '';
+        
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
             
-            // 恢复字符串内容
-            $result = $protectedResult;
-            foreach ($strings as $key => $value) {
-                $result = str_replace($key, $value, $result);
+            // 跳过空行（在方法体内）
+            if (empty($trimmed)) {
+                if (!$inMethod) {
+                    $compressedLines[] = '';
+                }
+                    continue;
+            }
+            
+            // 检测类定义
+            if (preg_match('/^class\s+\w+/', $trimmed)) {
+                if ($inMethod) {
+                    // 结束上一个方法，将方法体追加到方法定义行
+                    $lastIndex = count($compressedLines) - 1;
+                    if ($lastIndex >= 0 && !empty($methodBody)) {
+                        $compressedLines[$lastIndex] .= $methodBody;
+                    }
+                    $methodBody = '';
+                    $inMethod = false;
+                }
+                $compressedLines[] = $trimmed;
+                continue;
+            }
+            
+            // 检测方法定义
+            if (preg_match('/^(public|private|protected|static)\s+.*function\s+\w+\s*\(/', $trimmed)) {
+                if ($inMethod) {
+                    // 结束上一个方法
+                    $lastIndex = count($compressedLines) - 1;
+                    if ($lastIndex >= 0 && !empty($methodBody)) {
+                        $compressedLines[$lastIndex] .= $methodBody;
+                    }
+                    $methodBody = '';
+                }
+                
+                // 获取方法定义的缩进
+                $methodIndent = preg_match('/^(\s+)/', $line, $m) ? $m[1] : '    ';
+                $methodDefLine = $trimmed;
+                $braceLevel = substr_count($trimmed, '{') - substr_count($trimmed, '}');
+                
+                // 如果方法定义行已经包含完整的方法体
+                if (strpos($trimmed, '{') !== false && strpos($trimmed, '}') !== false && $braceLevel == 0) {
+                    // 单行方法，直接添加
+                    $compressedLines[] = $methodIndent . $trimmed;
+                    $inMethod = false;
+                } else {
+                    // 方法体需要继续
+                    $inMethod = true;
+                    if (strpos($trimmed, '{') !== false) {
+                        // 方法定义行包含 {
+                        $compressedLines[] = $methodIndent . $trimmed;
+                    } else {
+                        // 方法定义行不包含 {，需要添加
+                        $compressedLines[] = $methodIndent . $trimmed . '{';
+                        $braceLevel++;
+                    }
+                }
+                continue;
+            }
+            
+            // 在方法体内
+            if ($inMethod) {
+                $braceLevel += substr_count($trimmed, '{') - substr_count($trimmed, '}');
+                
+                // 将方法体内容追加到缓冲区
+                $methodBody .= $trimmed;
+                
+                // 检查方法是否结束
+                if ($braceLevel <= 0 && strpos($trimmed, '}') !== false) {
+                    // 方法结束，将方法体追加到方法定义行
+                    $lastIndex = count($compressedLines) - 1;
+                    if ($lastIndex >= 0) {
+                        $compressedLines[$lastIndex] .= $methodBody;
+                    }
+                    $methodBody = '';
+                    $inMethod = false;
+                    $braceLevel = 0;
+                }
+            } else {
+                // 类外或方法间
+                $compressedLines[] = $trimmed;
             }
         }
         
-        // 移除多个连续空行（保留最多一个空行）
+        // 处理最后一个方法
+        if ($inMethod && !empty($methodBody)) {
+            $lastIndex = count($compressedLines) - 1;
+            if ($lastIndex >= 0) {
+                $compressedLines[$lastIndex] .= $methodBody;
+            }
+        }
+        
+        $result = implode("\n", $compressedLines);
+        
+        // 清理多余的空行和空格
+        $result = preg_replace('/\{\s*\n\s*/', '{', $result);
+        $result = preg_replace('/\n\s*\}/', '}', $result);
+        
+        // 移除多个连续空行（保留最多一个）
         $result = preg_replace('/\n{3,}/', "\n\n", $result);
         
         // 移除行首的空行

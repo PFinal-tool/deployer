@@ -25,10 +25,100 @@ class Deployer {
     }
     
     /**
+     * 获取部署锁文件路径
+     */
+    private function getLockFilePath($projectId) {
+        $lockDir = sys_get_temp_dir() . '/deployer_locks';
+        if (!is_dir($lockDir)) {
+            @mkdir($lockDir, 0755, true);
+        }
+        return $lockDir . '/deploy_lock_' . $projectId . '.lock';
+    }
+    
+    /**
+     * 获取部署锁
+     * 
+     * @param int $projectId 项目 ID
+     * @return resource|null 锁文件句柄，如果获取失败返回 null
+     * @throws Exception 如果锁已被占用
+     */
+    private function acquireDeploymentLock($projectId) {
+        $lockFile = $this->getLockFilePath($projectId);
+        
+        // 检查锁文件是否存在且被占用
+        if (file_exists($lockFile)) {
+            // 检查锁文件是否过期（超过 30 分钟视为过期）
+            $lockTime = filemtime($lockFile);
+            if (time() - $lockTime > 1800) {
+                Logger::warning("Deployment lock expired, removing stale lock: project_id={$projectId}, lock_age=" . (time() - $lockTime) . "s");
+                @unlink($lockFile);
+            } else {
+                // 读取锁文件内容，查看进程是否还在运行
+                $lockContent = @file_get_contents($lockFile);
+                if ($lockContent) {
+                    $lines = explode("\n", trim($lockContent));
+                    if (count($lines) >= 2) {
+                        $pid = intval($lines[1]);
+                        // 检查进程是否还在运行（仅在 Linux/Unix 系统）
+                        if ($pid > 0 && function_exists('posix_kill')) {
+                            if (@posix_kill($pid, 0)) {
+                                // 进程还在运行，锁被占用
+                                Logger::warning("Deployment lock is held by running process: project_id={$projectId}, pid={$pid}");
+                                throw new Exception("项目正在部署中，请稍候再试（进程 ID: {$pid}）");
+                            } else {
+                                // 进程不存在，删除过期的锁文件
+                                Logger::warning("Deployment lock process not found, removing stale lock: project_id={$projectId}, pid={$pid}");
+                                @unlink($lockFile);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 尝试获取锁
+        $fp = @fopen($lockFile, 'w');
+        if (!$fp) {
+            throw new Exception("无法创建部署锁文件");
+        }
+        
+        // 使用非阻塞锁
+        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+            fclose($fp);
+            Logger::warning("Deployment lock acquisition failed: project_id={$projectId}");
+            throw new Exception("项目正在部署中，请稍候再试");
+        }
+        
+        // 写入锁信息
+        fwrite($fp, date('Y-m-d H:i:s') . "\n" . getmypid() . "\n");
+        fflush($fp);
+        
+        Logger::debug("Deployment lock acquired: project_id={$projectId}, lock_file={$lockFile}");
+        
+        return $fp;
+    }
+    
+    /**
+     * 释放部署锁
+     * 
+     * @param resource|null $lockHandle 锁文件句柄
+     */
+    private function releaseDeploymentLock($lockHandle) {
+        if ($lockHandle && is_resource($lockHandle)) {
+            $lockFile = stream_get_meta_data($lockHandle)['uri'];
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+            @unlink($lockFile);
+            Logger::debug("Deployment lock released: lock_file={$lockFile}");
+        }
+    }
+    
+    /**
      * 执行部署
      */
     public function deploy($projectId, $branch = null) {
         $deploymentId = null;
+        $lockHandle = null;
         
         try {
             // 获取项目信息
@@ -58,6 +148,9 @@ class Deployer {
             ]);
             
             Logger::info("Starting deployment: project_id={$projectId}, branch={$branch}, deployment_id={$deploymentId}");
+            
+            // 获取部署锁（防止并发部署）
+            $lockHandle = $this->acquireDeploymentLock($projectId);
             
         } catch (Exception $e) {
             // 如果连部署记录都无法创建，记录错误并返回
@@ -231,6 +324,9 @@ class Deployer {
                 'error' => $error,
                 'output' => "=== Deployment Initialization Failed ===\nError: {$error}"
             ];
+        } finally {
+            // 确保释放锁（无论成功还是失败）
+            $this->releaseDeploymentLock($lockHandle);
         }
     }
     
