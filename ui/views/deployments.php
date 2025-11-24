@@ -26,7 +26,7 @@ require_once __DIR__ . '/../../lang/zh.php';
 </div></div>
 
 <div class="wrap">
-  <table>
+  <table class="data-table">
     <thead>
       <tr>
         <th><?php echo Lang::get('project_name'); ?></th>

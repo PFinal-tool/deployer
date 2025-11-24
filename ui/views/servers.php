@@ -40,7 +40,7 @@ require_once __DIR__ . '/../../lang/zh.php';
     </thead>
   </table>
 
-  <table>
+  <table class="data-table">
     <thead>
       <tr>
         <th><?php echo Lang::get('server_name'); ?></th>

@@ -105,10 +105,10 @@ class GitDeployer {
             return $cmd;
         }
         
-        // Branch 部署：使用标准方式
+        // Branch 部署：使用浅克隆 (增加 --depth 1)
         $url = $this->buildAuthenticatedUrl();
         $cmd = sprintf(
-            "cd %s && git clone -b %s %s .",
+            "cd %s && git clone --depth 1 -b %s %s .",
             escapeshellarg($this->deployPath),
             escapeshellarg($this->branch),
             escapeshellarg($url)
@@ -256,9 +256,9 @@ class GitDeployer {
             );
             Logger::debug("Pull command for tag: {$this->branch}");
         } else {
-            // Branch 部署：fetch 然后 checkout 和 pull
+            // Branch 部署：fetch 时也使用浅克隆 (增加 --depth 1)
             $commands[] = sprintf(
-                "cd %s && git fetch origin && git checkout %s && git pull origin %s",
+                "cd %s && git fetch --depth 1 origin && git checkout -f %s && git reset --hard origin/%s",
                 escapeshellarg($this->deployPath),
                 escapeshellarg($this->branch),
                 escapeshellarg($this->branch)
