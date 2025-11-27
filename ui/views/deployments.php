@@ -26,7 +26,7 @@ require_once __DIR__ . '/../../lang/zh.php';
 </div></div>
 
 <div class="wrap">
-  <table>
+  <table class="data-table">
     <thead>
       <tr>
         <th><?php echo Lang::get('project_name'); ?></th>
@@ -87,19 +87,10 @@ function showLog(deploymentId){
             logText='暂无日志';
           }
           content.textContent=logText;
-          content.style.whiteSpace='pre-wrap';
-          content.style.fontFamily='monospace';
-          content.style.fontSize='12px';
-          content.style.padding='10px';
-          content.style.backgroundColor='#f5f5f5';
-          content.style.border='1px solid #ddd';
-          content.style.borderRadius='4px';
-          content.style.maxHeight='500px';
-          content.style.overflow='auto';
         })
         .catch(err=>{
           content.textContent='加载日志失败: '+err.message;
-          content.style.color='red';
+          content.style.color='#ff5555';
         });
     }
   }else{

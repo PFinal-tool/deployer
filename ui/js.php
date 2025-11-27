@@ -63,7 +63,15 @@ function loadDeploymentLog(deploymentId) {
     .then(data => {
         const logEl = document.getElementById('deployment-log-' + deploymentId);
         if (logEl) {
+            const isScrolledToBottom = logEl.scrollHeight - logEl.clientHeight <= logEl.scrollTop + 1;
+            
             logEl.textContent = data.output || data.error || '暂无日志';
+            
+            // 如果原本就在底部，或者内容刚初始化，自动滚动到底部
+            if (isScrolledToBottom || !logEl.getAttribute('data-init')) {
+                logEl.scrollTop = logEl.scrollHeight;
+                logEl.setAttribute('data-init', '1');
+            }
         }
     });
 }
