@@ -54,7 +54,7 @@ body{font:13px/1.5 "Segoe UI", Roboto, Helvetica, Arial, sans-serif;margin:0;bac
 .text-muted { color:#6c757d; }
 
 /* 日志输出 */
-.log-output { background:#2d2d2d; color:#f8f8f2; padding:15px; border-radius:4px; max-height:500px; overflow:auto; font-family:Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; font-size:12px; line-height:1.5; }
+.log-output { background:#2d2d2d; color:#f8f8f2; padding:15px; border-radius:4px; max-height:500px; overflow:auto; font-family:Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; font-size:12px; line-height:1.5; white-space: pre-wrap; word-break: break-all; }
 
 /* 环境检测折叠面板 */
 .env-check-summary { cursor:pointer; padding:10px 15px; background:#fff; border:1px solid #e0e0e0; border-radius:4px; display:flex; justify-content:space-between; align-items:center; margin-top:20px; }

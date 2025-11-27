@@ -214,7 +214,14 @@ foreach ($envCheck as $check) {
 
 <!-- 部署对话框 (保持原样) -->
 <div id="deploy-dialog" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; opacity: 0; transition: opacity 0.2s ease-in-out;">
-  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) scale(0.95); background:white; padding:25px; border-radius:8px; min-width:420px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); transition: transform 0.2s ease-in-out;">
+  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) scale(0.95); background:white; padding:25px; border-radius:8px; min-width:420px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); transition: transform 0.2s ease-in-out; overflow: hidden;">
+    <!-- Loading 遮罩 -->
+    <div id="deploy-loading" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.9); z-index:10; flex-direction:column; justify-content:center; align-items:center;">
+        <div style="font-size:40px; margin-bottom:20px; animation: bounce 1s infinite;">🚀</div>
+        <div style="font-size:16px; color:#333; font-weight:600;">正在部署...</div>
+        <div style="font-size:13px; color:#666; margin-top:10px;">请耐心等待，不要关闭页面</div>
+    </div>
+
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid #eee; padding-bottom:15px;">
       <h3 style="margin:0; font-size:18px; color:#333;">部署项目</h3>
       <span style="cursor:pointer; font-size:20px; color:#999; line-height:1;" onclick="hideDeployDialog()">&times;</span>
@@ -244,12 +251,18 @@ foreach ($envCheck as $check) {
       
       <div style="text-align:right; margin-top:25px; display:flex; justify-content:flex-end; gap:10px;">
         <button type="button" class="btn" onclick="hideDeployDialog()" style="border:none; background:#f5f5f5; color:#666; padding:8px 16px; border-radius:4px; cursor:pointer;">取消</button>
-        <button type="submit" class="btn" style="border:none; background:#007bff; color:white; padding:8px 20px; border-radius:4px; cursor:pointer; font-weight:500; box-shadow: 0 2px 5px rgba(0,123,255,0.3);" onclick="return confirm('确定要部署吗？')">开始部署</button>
+        <button type="submit" class="btn" style="border:none; background:#007bff; color:white; padding:8px 20px; border-radius:4px; cursor:pointer; font-weight:500; box-shadow: 0 2px 5px rgba(0,123,255,0.3);">开始部署</button>
       </div>
     </form>
   </div>
 </div>
 
+<style>
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+</style>
 <?php echo getJS(); ?>
 <script>
 function showDeployDialog(projectId, defaultBranch) {
@@ -263,6 +276,9 @@ function showDeployDialog(projectId, defaultBranch) {
       defaultRadio.checked = true;
       toggleCustomRef(); // 触发状态更新
   }
+
+  // 隐藏 Loading
+  document.getElementById('deploy-loading').style.display = 'none';
 
   const dialog = document.getElementById('deploy-dialog');
   const content = dialog.querySelector('div');
@@ -320,6 +336,12 @@ function toggleEnvCheck() {
 
 // 表单提交前处理：如果选择默认分支，移除 branch 参数
 document.getElementById('deploy-form').addEventListener('submit', function(e) {
+  // 确认对话框
+  if(!confirm('确定要部署吗？')) {
+    e.preventDefault();
+    return false;
+  }
+
   const deployType = document.querySelector('input[name="deploy_type"]:checked').value;
   if (deployType === 'default') {
     // 移除 branch 输入框，让后端使用默认分支
@@ -329,6 +351,14 @@ document.getElementById('deploy-form').addEventListener('submit', function(e) {
       branchInput.name = '';
     }
   }
+
+  // 显示 Loading
+  const loading = document.getElementById('deploy-loading');
+  loading.style.display = 'flex';
+  
+  // 防止重复提交
+  const submitBtn = this.querySelector('button[type="submit"]');
+  if(submitBtn) submitBtn.disabled = true;
 });
 
 // 点击对话框外部关闭
