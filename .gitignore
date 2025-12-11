@@ -22,3 +22,4 @@ Thumbs.db
 *.tmp
 *.bak
 CODE_REVIEW.md
+.playwright-mcp/
