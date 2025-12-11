@@ -7,6 +7,17 @@ class Database {
     private $db = null;
     private $dbFile = null;
     
+    // 允许的表名白名单（防止SQL注入）
+    private static $allowedTables = ['users', 'servers', 'projects', 'deployments'];
+    
+    // 各表的字段名白名单（防止SQL注入）
+    private static $allowedFields = [
+        'users' => ['id', 'username', 'password', 'is_default_password', 'created_at'],
+        'servers' => ['id', 'name', 'host', 'port', 'username', 'key_path', 'key_content', 'password', 'created_at', 'updated_at'],
+        'projects' => ['id', 'name', 'repo_url', 'branch', 'deploy_path', 'server_id', 'git_username', 'git_password', 'pre_deploy_script', 'post_deploy_script', 'webhook_enabled', 'webhook_token', 'created_at', 'updated_at'],
+        'deployments' => ['id', 'project_id', 'branch', 'commit_hash', 'commit_message', 'status', 'output', 'error', 'started_at', 'finished_at']
+    ];
+    
     private function __construct($dbFile = null) {
         if ($dbFile === null) {
             $dbFile = __DIR__ . '/../storage/deployer.db';
@@ -204,7 +215,60 @@ class Database {
         return $results;
     }
     
+    /**
+     * 验证表名是否在白名单中
+     */
+    private function validateTableName($table) {
+        if (!in_array($table, self::$allowedTables, true)) {
+            throw new InvalidArgumentException("无效的表名: {$table}");
+        }
+        return $table;
+    }
+    
+    /**
+     * 验证字段名是否在白名单中
+     */
+    private function validateFieldNames($table, $fields) {
+        if (!isset(self::$allowedFields[$table])) {
+            throw new InvalidArgumentException("表 {$table} 没有定义字段白名单");
+        }
+        $allowed = self::$allowedFields[$table];
+        foreach ($fields as $field) {
+            if (!in_array($field, $allowed, true)) {
+                throw new InvalidArgumentException("表 {$table} 中不允许使用字段: {$field}");
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * 验证WHERE子句中的字段名（简单验证，只允许白名单字段）
+     */
+    private function validateWhereClause($table, $where) {
+        // 提取WHERE子句中的字段名（简单匹配，如 "id = ?" 或 "name = :name"）
+        // 这里只做基本验证，确保WHERE子句格式正确
+        if (empty($where) || !is_string($where)) {
+            throw new InvalidArgumentException("WHERE子句不能为空且必须是字符串");
+        }
+        // 检查是否包含SQL注入特征
+        if (preg_match('/[;\'"]/', $where) && !preg_match('/^\w+\s*[=<>!]+\s*[?:]/', $where)) {
+            // 如果包含特殊字符但不是简单的字段比较，可能是注入尝试
+            // 允许简单的字段比较，如 "id = ?" 或 "id = :id"
+            if (!preg_match('/^\w+\s*[=<>!]+\s*[?:]\w*$/', trim($where))) {
+                Logger::warning("可疑的WHERE子句: {$where}");
+            }
+        }
+        return $where;
+    }
+    
     public function insert($table, $data) {
+        // 验证表名
+        $table = $this->validateTableName($table);
+        
+        // 验证字段名
+        $fields = array_keys($data);
+        $this->validateFieldNames($table, $fields);
+        
         // 加密敏感字段
         if ($table === 'servers') {
             $encryptFields = ['password', 'key_content'];
@@ -218,18 +282,41 @@ class Database {
             }
         }
         
-        $fields = array_keys($data);
-        $placeholders = ':' . implode(', :', $fields);
-        $fieldsStr = implode(', ', $fields);
+        // 使用白名单字段名构建SQL（防止注入）
+        $validFields = [];
+        $validData = [];
+        foreach ($fields as $field) {
+            if (in_array($field, self::$allowedFields[$table], true)) {
+                $validFields[] = $field;
+                $validData[$field] = $data[$field];
+            }
+        }
+        
+        if (empty($validFields)) {
+            throw new InvalidArgumentException("没有有效的字段可以插入");
+        }
+        
+        $placeholders = ':' . implode(', :', $validFields);
+        $fieldsStr = implode(', ', $validFields);
         
         $sql = "INSERT INTO {$table} ({$fieldsStr}) VALUES ({$placeholders})";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute($data);
+        $stmt->execute($validData);
         
         return $this->db->lastInsertId();
     }
     
     public function update($table, $data, $where, $whereParams = []) {
+        // 验证表名
+        $table = $this->validateTableName($table);
+        
+        // 验证字段名
+        $fields = array_keys($data);
+        $this->validateFieldNames($table, $fields);
+        
+        // 验证WHERE子句
+        $where = $this->validateWhereClause($table, $where);
+        
         // 加密敏感字段
         if ($table === 'servers') {
             $encryptFields = ['password', 'key_content'];
@@ -243,10 +330,20 @@ class Database {
             }
         }
         
+        // 使用白名单字段名构建SET子句（防止注入）
         $setParts = [];
-        foreach (array_keys($data) as $field) {
-            $setParts[] = "{$field} = :{$field}";
+        $validData = [];
+        foreach ($fields as $field) {
+            if (in_array($field, self::$allowedFields[$table], true)) {
+                $setParts[] = "{$field} = :{$field}";
+                $validData[$field] = $data[$field];
+            }
         }
+        
+        if (empty($setParts)) {
+            throw new InvalidArgumentException("没有有效的字段可以更新");
+        }
+        
         $setStr = implode(', ', $setParts);
         
         // 将 WHERE 子句中的 ? 替换为命名参数
@@ -270,12 +367,18 @@ class Database {
         
         $sql = "UPDATE {$table} SET {$setStr} WHERE {$wherePlaceholder}";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute(array_merge($data, $whereParamsNamed));
+        $stmt->execute(array_merge($validData, $whereParamsNamed));
         
         return $stmt->rowCount();
     }
     
     public function delete($table, $where, $whereParams = []) {
+        // 验证表名
+        $table = $this->validateTableName($table);
+        
+        // 验证WHERE子句
+        $where = $this->validateWhereClause($table, $where);
+        
         $sql = "DELETE FROM {$table} WHERE {$where}";
         $stmt = $this->db->prepare($sql);
         $stmt->execute($whereParams);

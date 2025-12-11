@@ -149,10 +149,20 @@ class Compiler {
                 $content = preg_replace("/__DIR__\s*\.\s*'\/\.\.\/storage\/deployer\.db'/", "__DIR__ . '/storage/deployer.db'", $content);
             }
         if ($file === 'ui/css.php') {
-            // CSS 已经内联，保持原样
+            // 提取并压缩CSS内容
+            if (preg_match('/<<<[\'"]CSS[\'"]\s*\n(.*?)\nCSS;/s', $content, $matches)) {
+                $cssContent = $matches[1];
+                $minifiedCSS = $this->minifyCSS($cssContent);
+                $content = str_replace($cssContent, $minifiedCSS, $content);
+            }
         }
         if ($file === 'ui/js.php') {
-            // JS 已经内联，保持原样
+            // 提取并压缩JS内容
+            if (preg_match('/<<<[\'"]JS[\'"]\s*\n(.*?)\nJS;/s', $content, $matches)) {
+                $jsContent = $matches[1];
+                $minifiedJS = $this->minifyJS($jsContent);
+                $content = str_replace($jsContent, $minifiedJS, $content);
+            }
         }
         
         return $content;
