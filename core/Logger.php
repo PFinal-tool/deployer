@@ -11,9 +11,7 @@ class Logger {
         self::$logFile = $logDir . '/deployer_' . date('Y-m-d') . '.log';
         
         // 1% 的概率触发清理（避免每次请求都扫描文件）
-        if (rand(1, 100) === 1) {
-            self::cleanOldLogs();
-        }
+        if (rand(1, 100) === 1) { self::cleanOldLogs(); }
     }
     
     // 新增清理方法
@@ -21,9 +19,7 @@ class Logger {
         $files = glob(self::$logDir . '/deployer_*.log');
         $now = time();
         foreach ($files as $file) {
-            if (is_file($file) && $now - filemtime($file) > 30 * 86400) { // 30天
-                @unlink($file);
-            }
+            if (is_file($file) && $now - filemtime($file) > 30 * 86400) { @unlink($file); }
         }
     }
     public static function log($message, $level = 'INFO') {if (self::$logFile === null) { self::init();}$timestamp = date('Y-m-d H:i:s');$logMessage = "[{$timestamp}] [{$level}] {$message}" . PHP_EOL;@file_put_contents(self::$logFile, $logMessage, FILE_APPEND);}

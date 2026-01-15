@@ -11,9 +11,7 @@ class CSRF {
      * 初始化会话（如果尚未启动）
      */
     private static function ensureSession() {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
     }
     
     /**
@@ -24,9 +22,7 @@ class CSRF {
     public static function generateToken(): string {
         self::ensureSession();
         
-        if (!isset($_SESSION[self::$sessionKey])) {
-            $_SESSION[self::$sessionKey] = bin2hex(random_bytes(32));
-        }
+        if (!isset($_SESSION[self::$sessionKey])) { $_SESSION[self::$sessionKey] = bin2hex(random_bytes(32)); }
         
         return $_SESSION[self::$sessionKey];
     }
@@ -40,29 +36,19 @@ class CSRF {
     public static function validate(?string $token = null): bool {
         self::ensureSession();
         
-        if (!isset($_SESSION[self::$sessionKey])) {
-            Logger::warning("CSRF validation failed: no token in session");
-            return false;
-        }
+        if (!isset($_SESSION[self::$sessionKey])) { Logger::warning("CSRF validation failed: no token in session"); return false; }
         
         $sessionToken = $_SESSION[self::$sessionKey];
         
         // 如果未提供 token，尝试从请求中获取
-        if ($token === null) {
-            $token = $_POST[self::$tokenName] ?? $_GET[self::$tokenName] ?? null;
-        }
+        if ($token === null) { $token = $_POST[self::$tokenName] ?? $_GET[self::$tokenName] ?? null; }
         
-        if ($token === null) {
-            Logger::warning("CSRF validation failed: no token provided");
-            return false;
-        }
+        if ($token === null) { Logger::warning("CSRF validation failed: no token provided"); return false; }
         
         // 使用 hash_equals 进行时间安全的比较
         $valid = hash_equals($sessionToken, $token);
         
-        if (!$valid) {
-            Logger::warning("CSRF validation failed: token mismatch");
-        }
+        if (!$valid) { Logger::warning("CSRF validation failed: token mismatch"); }
         
         return $valid;
     }

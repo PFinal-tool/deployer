@@ -16,12 +16,8 @@ class Deployer {
      */
     private function loadPlugins() {
         // 加载内置插件
-        if (class_exists('ComposerPlugin')) {
-            $this->plugins[] = new ComposerPlugin();
-        }
-        if (class_exists('ArtisanPlugin')) {
-            $this->plugins[] = new ArtisanPlugin();
-        }
+        if (class_exists('ComposerPlugin')) { $this->plugins[] = new ComposerPlugin(); }
+        if (class_exists('ArtisanPlugin')) { $this->plugins[] = new ArtisanPlugin(); }
     }
     
     /**
@@ -29,9 +25,7 @@ class Deployer {
      */
     private function getLockFilePath($projectId) {
         $lockDir = sys_get_temp_dir() . '/deployer_locks';
-        if (!is_dir($lockDir)) {
-            @mkdir($lockDir, 0755, true);
-        }
+        if (!is_dir($lockDir)) { @mkdir($lockDir, 0755, true); }
         return $lockDir . '/deploy_lock_' . $projectId . '.lock';
     }
     
@@ -46,48 +40,13 @@ class Deployer {
         $lockFile = $this->getLockFilePath($projectId);
         
         // 检查锁文件是否存在且被占用
-        if (file_exists($lockFile)) {
-            // 检查锁文件是否过期（超过 30 分钟视为过期）
-            $lockTime = filemtime($lockFile);
-            if (time() - $lockTime > 1800) {
-                Logger::warning("Deployment lock expired, removing stale lock: project_id={$projectId}, lock_age=" . (time() - $lockTime) . "s");
-                @unlink($lockFile);
-            } else {
-                // 读取锁文件内容，查看进程是否还在运行
-                $lockContent = @file_get_contents($lockFile);
-                if ($lockContent) {
-                    $lines = explode("\n", trim($lockContent));
-                    if (count($lines) >= 2) {
-                        $pid = intval($lines[1]);
-                        // 检查进程是否还在运行（仅在 Linux/Unix 系统）
-                        if ($pid > 0 && function_exists('posix_kill')) {
-                            if (@posix_kill($pid, 0)) {
-                                // 进程还在运行，锁被占用
-                                Logger::warning("Deployment lock is held by running process: project_id={$projectId}, pid={$pid}");
-                                throw new Exception("项目正在部署中，请稍候再试（进程 ID: {$pid}）");
-                            } else {
-                                // 进程不存在，删除过期的锁文件
-                                Logger::warning("Deployment lock process not found, removing stale lock: project_id={$projectId}, pid={$pid}");
-                                @unlink($lockFile);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        if (file_exists($lockFile)) { $lockTime = filemtime($lockFile); if (time() - $lockTime > 1800) { Logger::warning("Deployment lock expired, removing stale lock: project_id={$projectId}, lock_age=" . (time() - $lockTime) . "s"); @unlink($lockFile); } else { $lockContent = @file_get_contents($lockFile); if ($lockContent) { $lines = explode("\n", trim($lockContent)); if (count($lines) >= 2) { $pid = intval($lines[1]); if ($pid > 0 && function_exists('posix_kill')) { if (@posix_kill($pid, 0)) { Logger::warning("Deployment lock is held by running process: project_id={$projectId}, pid={$pid}"); throw new Exception("项目正在部署中，请稍候再试（进程 ID: {$pid}）"); } else { Logger::warning("Deployment lock process not found, removing stale lock: project_id={$projectId}, pid={$pid}"); @unlink($lockFile); } } } } } }
         
         // 尝试获取锁
         $fp = @fopen($lockFile, 'w');
-        if (!$fp) {
-            throw new Exception("无法创建部署锁文件");
-        }
-        
+        if (!$fp) { throw new Exception("无法创建部署锁文件"); }
         // 使用非阻塞锁
-        if (!flock($fp, LOCK_EX | LOCK_NB)) {
-            fclose($fp);
-            Logger::warning("Deployment lock acquisition failed: project_id={$projectId}");
-            throw new Exception("项目正在部署中，请稍候再试");
-        }
+        if (!flock($fp, LOCK_EX | LOCK_NB)) { fclose($fp); Logger::warning("Deployment lock acquisition failed: project_id={$projectId}"); throw new Exception("项目正在部署中，请稍候再试"); }
         
         // 写入锁信息
         fwrite($fp, date('Y-m-d H:i:s') . "\n" . getmypid() . "\n");
@@ -104,13 +63,7 @@ class Deployer {
      * @param resource|null $lockHandle 锁文件句柄
      */
     private function releaseDeploymentLock($lockHandle) {
-        if ($lockHandle && is_resource($lockHandle)) {
-            $lockFile = stream_get_meta_data($lockHandle)['uri'];
-            flock($lockHandle, LOCK_UN);
-            fclose($lockHandle);
-            @unlink($lockFile);
-            Logger::debug("Deployment lock released: lock_file={$lockFile}");
-        }
+        if ($lockHandle && is_resource($lockHandle)) { $lockFile = stream_get_meta_data($lockHandle)['uri']; flock($lockHandle, LOCK_UN); fclose($lockHandle); @unlink($lockFile); Logger::debug("Deployment lock released: lock_file={$lockFile}"); }
     }
     
     /**
@@ -124,20 +77,11 @@ class Deployer {
             // 获取项目信息
             $project = $this->db->fetchOne("SELECT * FROM projects WHERE id = ?", [$projectId]);
             
-            if (!$project) {
-                throw new Exception("Project not found");
-            }
-            
-            if ($branch === null) {
-                $branch = $project['branch'];
-            }
-            
+            if (!$project) { throw new Exception("Project not found"); }
+            if ($branch === null) { $branch = $project['branch']; }
             // 获取服务器信息
             $server = $this->db->fetchOne("SELECT * FROM servers WHERE id = ?", [$project['server_id']]);
-            
-            if (!$server) {
-                throw new Exception("Server not found");
-            }
+            if (!$server) { throw new Exception("Server not found"); }
             
             // 创建部署记录
             $deploymentId = $this->db->insert('deployments', [
@@ -187,9 +131,7 @@ class Deployer {
             Logger::debug("GitDeployer initialized: repo_url=" . $project['repo_url'] . ", git_username=" . ($gitUsername ?: 'null') . ", git_password=" . $gitPassword);
             
             // 检查 Git 认证信息是否完整
-            if (strpos($project['repo_url'], 'https://') === 0 && (!$gitUsername || !$project['git_password'])) {
-                Logger::warning("Git HTTPS URL requires authentication but credentials incomplete: git_username=" . ($gitUsername ?: 'null') . ", git_password=" . $gitPassword);
-            }
+            if (strpos($project['repo_url'], 'https://') === 0 && (!$gitUsername || !$project['git_password'])) { Logger::warning("Git HTTPS URL requires authentication but credentials incomplete: git_username=" . ($gitUsername ?: 'null') . ", git_password=" . $gitPassword); }
             
             $output = [];
             $output[] = "=== Deployment Started ===";
@@ -200,11 +142,7 @@ class Deployer {
             
             try {
                 // 执行部署前脚本
-                if (!empty($project['pre_deploy_script'])) {
-                    $output[] = "=== Pre-deploy Script ===";
-                    $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['pre_deploy_script']);
-                    $output[] = "";
-                }
+                if (!empty($project['pre_deploy_script'])) { $output[] = "=== Pre-deploy Script ==="; $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['pre_deploy_script']); $output[] = ""; }
                 
                 // 执行 Git 部署
                 $output[] = "=== Git Operations ===";
@@ -215,20 +153,11 @@ class Deployer {
                 // 执行插件任务
                 $output[] = "=== Running Plugins ===";
                 foreach ($this->plugins as $plugin) {
-                    if ($plugin->shouldRun($project)) {
-                        $output[] = "Running plugin: " . get_class($plugin);
-                        $pluginOutput = $plugin->execute($sshExecutor, $project);
-                        $output[] = $pluginOutput;
-                        $output[] = "";
-                    }
+                    if ($plugin->shouldRun($project)) { $output[] = "Running plugin: " . get_class($plugin); $pluginOutput = $plugin->execute($sshExecutor, $project); $output[] = $pluginOutput; $output[] = ""; }
                 }
                 
                 // 执行部署后脚本
-                if (!empty($project['post_deploy_script'])) {
-                    $output[] = "=== Post-deploy Script ===";
-                    $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['post_deploy_script']);
-                    $output[] = "";
-                }
+                if (!empty($project['post_deploy_script'])) { $output[] = "=== Post-deploy Script ==="; $output[] = $this->executeScript($sshExecutor, $project['deploy_path'], $project['post_deploy_script']); $output[] = ""; }
                 
                 $output[] = "=== Deployment Completed ===";
                 
@@ -258,34 +187,10 @@ class Deployer {
                 $output[] = "Error: {$error}";
                 
                 // 检查是否是 Git 认证问题，给出更友好的提示
-                if (strpos($error, 'could not read Username') !== false || strpos($error, 'authentication') !== false) {
-                    $output[] = "";
-                    $output[] = "=== 解决方案 ===";
-                    $output[] = "Git 仓库需要认证信息，但未配置。请按以下步骤操作：";
-                    $output[] = "1. 进入项目列表页面";
-                    $output[] = "2. 点击编辑项目";
-                    $output[] = "3. 填写 'Git 用户名' 和 'Git 密码' 字段";
-                    $output[] = "4. 保存后重新部署";
-                    $output[] = "";
-                    $output[] = "注意：对于 HTTPS 私有仓库，必须填写用户名和密码/访问令牌";
-                }
-                
+                if (strpos($error, 'could not read Username') !== false || strpos($error, 'authentication') !== false) { $output[] = ""; $output[] = "=== 解决方案 ==="; $output[] = "Git 仓库需要认证信息，但未配置。请按以下步骤操作："; $output[] = "1. 进入项目列表页面"; $output[] = "2. 点击编辑项目"; $output[] = "3. 填写 'Git 用户名' 和 'Git 密码' 字段"; $output[] = "4. 保存后重新部署"; $output[] = ""; $output[] = "注意：对于 HTTPS 私有仓库，必须填写用户名和密码/访问令牌"; }
                 // 只在开发环境显示详细错误信息（生产环境隐藏）
-                $isDevelopment = getenv('APP_ENV') === 'development' 
-                    || ini_get('display_errors') 
-                    || (defined('APP_DEBUG') && APP_DEBUG);
-                
-                if ($isDevelopment) {
-                    $output[] = "";
-                    $output[] = "Error Details:";
-                    $output[] = "File: " . $e->getFile();
-                    $output[] = "Line: " . $e->getLine();
-                    $output[] = "Trace:";
-                    $output[] = $e->getTraceAsString();
-                } else {
-                    $output[] = "";
-                    $output[] = "提示: 详细错误信息已记录到日志文件，请联系管理员查看";
-                }
+                $isDevelopment = getenv('APP_ENV') === 'development' || ini_get('display_errors') || (defined('APP_DEBUG') && APP_DEBUG);
+                if ($isDevelopment) { $output[] = ""; $output[] = "Error Details:"; $output[] = "File: " . $e->getFile(); $output[] = "Line: " . $e->getLine(); $output[] = "Trace:"; $output[] = $e->getTraceAsString(); } else { $output[] = ""; $output[] = "提示: 详细错误信息已记录到日志文件，请联系管理员查看"; }
                 
                 Logger::error("Deployment failed: {$error}");
                 Logger::error("Deployment error details: " . $e->getFile() . ":" . $e->getLine() . "\n" . $e->getTraceAsString());
@@ -306,14 +211,9 @@ class Deployer {
             Logger::error("Deployment initialization failed: {$error}");
             
             // 只在开发环境显示详细错误信息
-            $isDevelopment = getenv('APP_ENV') === 'development' 
-                || ini_get('display_errors') 
-                || (defined('APP_DEBUG') && APP_DEBUG);
-            
+            $isDevelopment = getenv('APP_ENV') === 'development' || ini_get('display_errors') || (defined('APP_DEBUG') && APP_DEBUG);
             $errorOutput = "=== Deployment Initialization Failed ===\nError: {$error}";
-            if ($isDevelopment) {
-                $errorOutput .= "\nFile: " . $e->getFile() . "\nLine: " . $e->getLine();
-            }
+            if ($isDevelopment) { $errorOutput .= "\nFile: " . $e->getFile() . "\nLine: " . $e->getLine(); }
             
             // 确保更新部署记录为失败
             $this->updateDeploymentStatus($deploymentId, 'failed', $error, $errorOutput);
@@ -334,41 +234,14 @@ class Deployer {
      * 更新部署状态（带错误处理）
      */
     private function updateDeploymentStatus($deploymentId, $status, $error = null, $output = null) {
-        if (!$deploymentId) {
-            Logger::warning("Cannot update deployment status: deployment_id is null");
-            return false;
-        }
-        
+        if (!$deploymentId) { Logger::warning("Cannot update deployment status: deployment_id is null"); return false; }
         try {
-            $updateData = [
-                'status' => $status,
-                'finished_at' => date('Y-m-d H:i:s')
-            ];
-            
-            if ($error !== null) {
-                $updateData['error'] = $error;
-            }
-            
-            if ($output !== null) {
-                $updateData['output'] = $output;
-            }
-            
+            $updateData = ['status' => $status, 'finished_at' => date('Y-m-d H:i:s')];
+            if ($error !== null) { $updateData['error'] = $error; }
+            if ($output !== null) { $updateData['output'] = $output; }
             Logger::debug("Updating deployment status: deployment_id={$deploymentId}, status={$status}, has_error=" . ($error !== null ? 'yes' : 'no') . ", has_output=" . ($output !== null ? 'yes' : 'no'));
-            
             $rowsAffected = $this->db->update('deployments', $updateData, 'id = ?', [$deploymentId]);
-            
-            if ($rowsAffected === 0) {
-                // 检查部署记录是否存在
-                $existing = $this->db->fetchOne("SELECT id, status FROM deployments WHERE id = ?", [$deploymentId]);
-                if ($existing) {
-                    Logger::warning("Failed to update deployment status: deployment_id={$deploymentId}, status={$status}, no rows affected (current status: {$existing['status']})");
-                } else {
-                    Logger::error("Failed to update deployment status: deployment_id={$deploymentId}, status={$status}, deployment record not found");
-                }
-            } else {
-                Logger::info("Deployment status updated successfully: deployment_id={$deploymentId}, status={$status}, rows_affected={$rowsAffected}");
-            }
-            
+            if ($rowsAffected === 0) { $existing = $this->db->fetchOne("SELECT id, status FROM deployments WHERE id = ?", [$deploymentId]); if ($existing) { Logger::warning("Failed to update deployment status: deployment_id={$deploymentId}, status={$status}, no rows affected (current status: {$existing['status']})"); } else { Logger::error("Failed to update deployment status: deployment_id={$deploymentId}, status={$status}, deployment record not found"); } } else { Logger::info("Deployment status updated successfully: deployment_id={$deploymentId}, status={$status}, rows_affected={$rowsAffected}"); }
             return $rowsAffected > 0;
         } catch (Exception $e) {
             Logger::error("Error updating deployment status: deployment_id={$deploymentId}, status={$status}, error=" . $e->getMessage() . ", trace=" . $e->getTraceAsString());
@@ -383,9 +256,7 @@ class Deployer {
      * @throws InvalidArgumentException 如果脚本包含危险命令
      */
     private function validateScript($script) {
-        if (empty($script)) {
-            return;
-        }
+        if (empty($script)) { return; }
         
         // 危险命令模式（禁止执行）
         $dangerousPatterns = [
@@ -428,30 +299,20 @@ class Deployer {
             $line = trim($line);
             
             // 跳过空行和注释
-            if (empty($line) || strpos($line, '#') === 0) {
-                continue;
-            }
-            
+            if (empty($line) || strpos($line, '#') === 0) { continue; }
             // 检查危险模式
             foreach ($dangerousPatterns as $pattern) {
-                if (preg_match($pattern, $line)) {
-                    Logger::warning("Dangerous command detected in script at line " . ($lineNum + 1) . ": " . substr($line, 0, 50));
-                    throw new InvalidArgumentException("脚本包含危险命令，不允许执行。检测到第 " . ($lineNum + 1) . " 行存在安全问题。");
-                }
+                if (preg_match($pattern, $line)) { Logger::warning("Dangerous command detected in script at line " . ($lineNum + 1) . ": " . substr($line, 0, 50)); throw new InvalidArgumentException("脚本包含危险命令，不允许执行。检测到第 " . ($lineNum + 1) . " 行存在安全问题。"); }
             }
         }
-        
         // 检查脚本长度（防止过长的脚本）
-        if (strlen($script) > 10000) {
-            throw new InvalidArgumentException("脚本内容过长（超过 10000 字符），可能存在安全风险");
-        }
+        if (strlen($script) > 10000) { throw new InvalidArgumentException("脚本内容过长（超过 10000 字符），可能存在安全风险"); }
     }
     
     /**
      * 执行脚本
      */
     private function executeScript($sshExecutor, $deployPath, $script) {
-        // 先验证脚本安全性
         try {
             $this->validateScript($script);
         } catch (InvalidArgumentException $e) {
@@ -459,17 +320,22 @@ class Deployer {
             throw $e;
         }
         
-        $command = sprintf(
-            "cd %s && %s",
-            escapeshellarg($deployPath),
-            $script
-        );
-        
+        $tempScript = tempnam(sys_get_temp_dir(), 'deploy_script_');
         try {
-            return $sshExecutor->execute($command);
-        } catch (Exception $e) {
-            Logger::error("Script execution failed: " . $e->getMessage());
-            return "Error: " . $e->getMessage();
+            file_put_contents($tempScript, $script);
+            chmod($tempScript, 0755);
+            
+            $command = sprintf(
+                "cd %s && %s",
+                escapeshellarg($deployPath),
+                escapeshellarg($tempScript)
+            );
+            
+            try {
+                return $sshExecutor->execute($command);
+            } catch (Exception $e) { Logger::error("Script execution failed: " . $e->getMessage()); return "Error: " . $e->getMessage(); }
+        } finally {
+            @unlink($tempScript);
         }
     }
     
@@ -478,16 +344,9 @@ class Deployer {
      */
     public function rollback($projectId, $commitHash) {
         $project = $this->db->fetchOne("SELECT * FROM projects WHERE id = ?", [$projectId]);
-        
-        if (!$project) {
-            throw new Exception("Project not found");
-        }
-        
+        if (!$project) { throw new Exception("Project not found"); }
         $server = $this->db->fetchOne("SELECT * FROM servers WHERE id = ?", [$project['server_id']]);
-        
-        if (!$server) {
-            throw new Exception("Server not found");
-        }
+        if (!$server) { throw new Exception("Server not found"); }
         
         $sshConfig = [
             'host' => $server['host'],
@@ -507,20 +366,7 @@ class Deployer {
         );
         
         $result = $gitDeployer->rollback($commitHash);
-        
-        if ($result['success']) {
-            // 记录回滚
-            $this->db->insert('deployments', [
-                'project_id' => $projectId,
-                'branch' => $project['branch'],
-                'commit_hash' => $commitHash,
-                'status' => 'rolled_back',
-                'output' => $result['output'],
-                'started_at' => date('Y-m-d H:i:s'),
-                'finished_at' => date('Y-m-d H:i:s')
-            ]);
-        }
-        
+        if ($result['success']) { $this->db->insert('deployments', ['project_id' => $projectId, 'branch' => $project['branch'], 'commit_hash' => $commitHash, 'status' => 'rolled_back', 'output' => $result['output'], 'started_at' => date('Y-m-d H:i:s'), 'finished_at' => date('Y-m-d H:i:s')]); }
         return $result;
     }
 }

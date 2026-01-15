@@ -51,33 +51,7 @@ class Router {
         }
     }
     private function handleLogin() {
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // 验证 CSRF Token
-            if (!CSRF::validate()) {
-                Logger::warning("CSRF validation failed on login");
-                $error = '安全验证失败，请重新提交';
-            } else {
-                try {
-                    $username = Validator::validateUsername($_POST['username'] ?? '');
-                    $password = $_POST['password'] ?? '';
-                    if (empty($password)) {throw new InvalidArgumentException("密码不能为空");}
-                    Logger::info("Login attempt: username={$username}");
-                    if ($this->auth->login($username, $password)) {
-                        Logger::info("Login successful: username={$username}");
-                        CSRF::regenerateToken(); // 登录成功后重新生成 token
-                        // 检查是否使用默认密码，如果是则跳转到修改密码页面
-                        if ($this->auth->isDefaultPassword()) {header('Location: ?action=change_password&required=1');exit;}
-                        header('Location: ?action=dashboard');exit;
-                    } else {
-                        Logger::warning("Login failed: username={$username}");
-                        $error = '用户名或密码错误';
-                    }
-                } catch (InvalidArgumentException $e) {
-                    Logger::warning("Login validation failed: " . $e->getMessage());
-                    $error = $e->getMessage();
-                }
-            }
-        }
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (!CSRF::validate()) { Logger::warning("CSRF validation failed on login"); $error = '安全验证失败，请重新提交'; } else { try { $username = Validator::validateUsername($_POST['username'] ?? ''); $password = $_POST['password'] ?? ''; if (empty($password)) {throw new InvalidArgumentException("密码不能为空");} Logger::info("Login attempt: username={$username}"); if ($this->auth->login($username, $password)) { Logger::info("Login successful: username={$username}"); CSRF::regenerateToken(); if ($this->auth->isDefaultPassword()) {header('Location: ?action=change_password&required=1');exit;} header('Location: ?action=dashboard');exit; } else { Logger::warning("Login failed: username={$username}"); $error = '用户名或密码错误'; } } catch (InvalidArgumentException $e) { Logger::warning("Login validation failed: " . $e->getMessage()); $error = $e->getMessage(); } } }
         $this->renderLogin($error ?? null);
     }
     private function handleLogout() {
@@ -86,20 +60,10 @@ class Router {
     }
     private function handleDashboard() {
         // 检查是否使用默认密码，如果是则强制跳转到修改密码页面
-        if ($this->auth->isDefaultPassword()) {
-            header('Location: ?action=change_password&required=1');
-            exit;
-        }
-        
+        if ($this->auth->isDefaultPassword()) { header('Location: ?action=change_password&required=1'); exit; }
         $db = Database::getInstance();
         $projects = $db->fetchAll("SELECT * FROM projects ORDER BY id DESC LIMIT 10");
-        $recentDeployments = $db->fetchAll("
-            SELECT d.*, p.name as project_name 
-            FROM deployments d 
-            JOIN projects p ON d.project_id = p.id 
-            ORDER BY d.started_at DESC 
-            LIMIT 10
-        ");
+        $recentDeployments = $db->fetchAll("SELECT d.*, p.name as project_name FROM deployments d JOIN projects p ON d.project_id = p.id ORDER BY d.started_at DESC LIMIT 10");
         // 环境检测
         $envCheck = $this->checkEnvironment();
         
@@ -112,40 +76,18 @@ class Router {
     private function checkSshpassForEnv() {
         // 方法1: 使用 command -v（优先使用完整路径）
         $path = trim(shell_exec('command -v sshpass 2>/dev/null') ?? '');
-        if ($path !== '' && file_exists($path)) {
-            return $path;
-        }
-        
+        if ($path !== '' && file_exists($path)) { return $path; }
         // 方法2: 使用 which
         $path = trim(shell_exec('which sshpass 2>/dev/null') ?? '');
-        if ($path !== '' && file_exists($path)) {
-            return $path;
-        }
-        
+        if ($path !== '' && file_exists($path)) { return $path; }
         // 方法3: 尝试常见路径
         $commonPaths = ['/usr/bin/sshpass', '/usr/local/bin/sshpass', '/bin/sshpass'];
         foreach ($commonPaths as $commonPath) {
-            if (file_exists($commonPath) && is_executable($commonPath)) {
-                return $commonPath;
-            }
+            if (file_exists($commonPath) && is_executable($commonPath)) { return $commonPath; }
         }
-        
         // 方法4: 尝试直接执行 sshpass -V 来验证（最后的手段）
         $output = @shell_exec('sshpass -V 2>&1');
-        if ($output !== null && strpos($output, 'sshpass') !== false) {
-            // 如果能执行，尝试找到完整路径
-            $envPath = getenv('PATH');
-            if ($envPath) {
-                $paths = explode(':', $envPath);
-                foreach ($paths as $p) {
-                    $fullPath = rtrim($p, '/') . '/sshpass';
-                    if (file_exists($fullPath) && is_executable($fullPath)) {
-                        return $fullPath;
-                    }
-                }
-            }
-            return 'sshpass';
-        }
+        if ($output !== null && strpos($output, 'sshpass') !== false) { $envPath = getenv('PATH'); if ($envPath) { $paths = explode(':', $envPath); foreach ($paths as $p) { $fullPath = rtrim($p, '/') . '/sshpass'; if (file_exists($fullPath) && is_executable($fullPath)) { return $fullPath; } } } return 'sshpass'; }
         
         return '';
     }
@@ -248,12 +190,7 @@ class Router {
 
     private function handleProjects() {
         $db = Database::getInstance();
-        $projects = $db->fetchAll("
-            SELECT p.*, s.name as server_name 
-            FROM projects p 
-            LEFT JOIN servers s ON p.server_id = s.id 
-            ORDER BY p.id DESC
-        ");
+        $projects = $db->fetchAll("SELECT p.*, s.name as server_name FROM projects p LEFT JOIN servers s ON p.server_id = s.id ORDER BY p.id DESC");
         
         $this->renderProjects($projects);
     }
@@ -262,26 +199,8 @@ class Router {
         $db = Database::getInstance();
         $id = $_GET['id'] ?? null;
         $project = null;
-        if ($id) {
-            try {
-                $validatedId = Validator::validateProjectId($id);
-                $project = $db->fetchOne("SELECT * FROM projects WHERE id = ?", [$validatedId]);
-            } catch (InvalidArgumentException $e) {
-                Logger::warning("Invalid project ID: " . $e->getMessage());
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的项目 ID'];
-                header('Location: ?action=projects');
-                exit;
-            }
-        }
-        
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // 验证 CSRF Token
-            if (!CSRF::validate()) {
-                Logger::warning("CSRF validation failed on project edit");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
-                header('Location: ?action=projects');
-                exit;
-            }
+        if ($id) { try { $validatedId = Validator::validateProjectId($id); $project = $db->fetchOne("SELECT * FROM projects WHERE id = ?", [$validatedId]); } catch (InvalidArgumentException $e) { Logger::warning("Invalid project ID: " . $e->getMessage()); $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的项目 ID']; header('Location: ?action=projects'); exit; } }
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (!CSRF::validate()) { Logger::warning("CSRF validation failed on project edit"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交']; header('Location: ?action=projects'); exit; }
             try {
                 // 验证输入参数
                 $data = [
@@ -298,33 +217,9 @@ class Router {
                 ];
                 // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
                 $gitPassword = Validator::validatePassword($_POST['git_password'] ?? '', true);
-                if ($id && $project) {
-                    // 编辑模式：如果密码字段为空，保留旧密码
-                    if ($gitPassword === '') {
-                        $data['git_password'] = $project['git_password'] ?? null;
-                        Logger::debug("Project edit: keeping old git_password (empty field provided)");
-                    } else {
-                        $data['git_password'] = $gitPassword; // 将在 Database::insert/update 中加密
-                        Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")");
-                    }
-                } else {
-                    // 新增模式：如果密码为空，保存 null
-                    $data['git_password'] = $gitPassword ?: null;
-                    Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null"));
-                }
-                
+                if ($id && $project) { if ($gitPassword === '') { $data['git_password'] = $project['git_password'] ?? null; Logger::debug("Project edit: keeping old git_password (empty field provided)"); } else { $data['git_password'] = $gitPassword; Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")"); } } else { $data['git_password'] = $gitPassword ?: null; Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null")); }
                 Logger::debug("Project save: git_username=" . ($data['git_username'] ?? 'null') . ", git_password=" . (isset($data['git_password']) && $data['git_password'] ? 'provided' : 'null'));
-                
-                if ($id) {
-                    $validatedId = Validator::validateProjectId($id);
-                    $whereClause = 'id ' . '=' . ' ' . chr(63);
-                    $db->update('projects', $data, $whereClause, [$validatedId]);
-                    Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
-                } else {
-                    $data['created_at'] = date('Y-m-d H:i:s');
-                    $id = $db->insert('projects', $data);
-                    Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
-                }
+                if ($id) { $validatedId = Validator::validateProjectId($id); $whereClause = 'id ' . '=' . ' ' . chr(63); $db->update('projects', $data, $whereClause, [$validatedId]); Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null')); } else { $data['created_at'] = date('Y-m-d H:i:s'); $id = $db->insert('projects', $data); Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null')); }
                 
                 CSRF::regenerateToken(); // 成功后重新生成 token
                 $_SESSION['flash'] = ['type' => 'success', 'message' => $id ? '项目更新成功' : '项目创建成功'];
@@ -346,12 +241,7 @@ class Router {
     private function handleProjectDelete() {
         try {
             // 验证 CSRF Token（如果是 POST 请求）
-            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
-                Logger::warning("CSRF validation failed on project delete");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败'];
-                header('Location: ?action=projects');
-                exit;
-            }
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) { Logger::warning("CSRF validation failed on project delete"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败']; header('Location: ?action=projects'); exit; }
             
             $id = Validator::validateProjectId($_GET['id'] ?? null);
             $db = Database::getInstance();
@@ -377,29 +267,8 @@ class Router {
         $db = Database::getInstance();
         $id = $_GET['id'] ?? null;
         $server = null;
-        if ($id) {
-            try {
-                $validatedId = Validator::validateServerId($id);
-                $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$validatedId]);
-                if ($server && isset($server['key_content'])) {
-                    unset($server['key_content']); // 安全：不显示密钥内容
-                }
-            } catch (InvalidArgumentException $e) {
-                Logger::warning("Invalid server ID: " . $e->getMessage());
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的服务器 ID'];
-                header('Location: ?action=servers');
-                exit;
-            }
-        }
-        
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // 验证 CSRF Token
-            if (!CSRF::validate()) {
-                Logger::warning("CSRF validation failed on server edit");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
-                header('Location: ?action=servers');
-                exit;
-            }
+        if ($id) { try { $validatedId = Validator::validateServerId($id); $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$validatedId]); if ($server && isset($server['key_content'])) { unset($server['key_content']); } } catch (InvalidArgumentException $e) { Logger::warning("Invalid server ID: " . $e->getMessage()); $_SESSION['flash'] = ['type' => 'error', 'message' => '无效的服务器 ID']; header('Location: ?action=servers'); exit; } }
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (!CSRF::validate()) { Logger::warning("CSRF validation failed on server edit"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交']; header('Location: ?action=servers'); exit; }
             
             try {
                 // 验证输入参数
@@ -414,54 +283,10 @@ class Router {
                 
                 // 处理密码：编辑时如果密码字段为空则保留旧密码，新增时如果为空则保存 null
                 $hasNewPassword = false;
-                if ($id && $server) {
-                    // 编辑模式：如果密码字段为空字符串，保留旧密码；如果不为空，更新为新密码
-                    $password = Validator::validatePassword($_POST['password'] ?? '', true);
-                    if ($password !== '') {
-                        $data['password'] = $password; // 将在 Database::insert/update 中加密
-                        $hasNewPassword = true;
-                        Logger::debug("Password field updated, length=" . strlen($password));
-                    } else {
-                        // 保留原有密码
-                        $data['password'] = $server['password'] ?? null;
-                        $hasNewPassword = isset($server['password']) && $server['password'] !== null && $server['password'] !== '';
-                        Logger::debug("Password field empty, keeping old password, old_password_length=" . (isset($server['password']) && $server['password'] !== null ? strlen($server['password']) : 0));
-                    }
-                } else {
-                    // 新增模式：如果密码字段不为空，保存密码；否则保存 null
-                    $password = Validator::validatePassword($_POST['password'] ?? '', true);
-                    $data['password'] = $password !== '' ? $password : null;
-                    $hasNewPassword = $password !== '';
-                    Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null'));
-                }
-                
+                if ($id && $server) { $password = Validator::validatePassword($_POST['password'] ?? '', true); if ($password !== '') { $data['password'] = $password; $hasNewPassword = true; Logger::debug("Password field updated, length=" . strlen($password)); } else { $data['password'] = $server['password'] ?? null; $hasNewPassword = isset($server['password']) && $server['password'] !== null && $server['password'] !== ''; Logger::debug("Password field empty, keeping old password, old_password_length=" . (isset($server['password']) && $server['password'] !== null ? strlen($server['password']) : 0)); } } else { $password = Validator::validatePassword($_POST['password'] ?? '', true); $data['password'] = $password !== '' ? $password : null; $hasNewPassword = $password !== ''; Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null')); }
                 // 如果有密码，清空密钥（密码认证优先）
-                if ($hasNewPassword) {
-                    $data['key_path'] = '';
-                    $data['key_content'] = null;
-                    Logger::info("Password provided, clearing key_path and key_content (password auth takes priority)");
-                } else {
-                    // 如果有上传密钥文件
-                    if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) {
-                        $keyContent = file_get_contents($_FILES['key_file']['tmp_name']);
-                        $data['key_content'] = base64_encode($keyContent); // 将在 Database::insert/update 中加密
-                        Logger::info("Server edit: uploaded key file, size=" . strlen($keyContent) . " bytes");
-                    } elseif ($id && $server && !empty($server['key_content'])) {
-                        // 保留原有密钥
-                        $data['key_content'] = $server['key_content'];
-                    }
-                }
-                
-                if ($id) {
-                    $validatedId = Validator::validateServerId($id);
-                    Logger::info("Updating server: id={$validatedId}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
-                    $whereClause = 'id ' . '=' . ' ' . chr(63);
-                    $db->update('servers', $data, $whereClause, [$validatedId]);
-                } else {
-                    Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
-                    $data['created_at'] = date('Y-m-d H:i:s');
-                    $id = $db->insert('servers', $data);
-                }
+                if ($hasNewPassword) { $data['key_path'] = ''; $data['key_content'] = null; Logger::info("Password provided, clearing key_path and key_content (password auth takes priority)"); } else { if (isset($_FILES['key_file']) && $_FILES['key_file']['error'] === UPLOAD_ERR_OK) { $keyContent = file_get_contents($_FILES['key_file']['tmp_name']); $data['key_content'] = base64_encode($keyContent); Logger::info("Server edit: uploaded key file, size=" . strlen($keyContent) . " bytes"); } elseif ($id && $server && !empty($server['key_content'])) { $data['key_content'] = $server['key_content']; } }
+                if ($id) { $validatedId = Validator::validateServerId($id); Logger::info("Updating server: id={$validatedId}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no')); $whereClause = 'id ' . '=' . ' ' . chr(63); $db->update('servers', $data, $whereClause, [$validatedId]); } else { Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no')); $data['created_at'] = date('Y-m-d H:i:s'); $id = $db->insert('servers', $data); }
                 
                 CSRF::regenerateToken(); // 成功后重新生成 token
                 $_SESSION['flash'] = ['type' => 'success', 'message' => $id ? '服务器更新成功' : '服务器创建成功'];
@@ -483,12 +308,7 @@ class Router {
     private function handleServerDelete() {
         try {
             // 验证 CSRF Token（如果是 POST 请求）
-            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
-                Logger::warning("CSRF validation failed on server delete");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败'];
-                header('Location: ?action=servers');
-                exit;
-            }
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) { Logger::warning("CSRF validation failed on server delete"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败']; header('Location: ?action=servers'); exit; }
             
             $id = Validator::validateServerId($_GET['id'] ?? null);
             Logger::info("Deleting server: id={$id}");
@@ -509,13 +329,7 @@ class Router {
             $id = Validator::validateServerId($_GET['id'] ?? null);
             $db = Database::getInstance();
             $server = $db->fetchOne("SELECT * FROM servers WHERE id = ?", [$id]);
-            
-            if (!$server) {
-                Logger::warning("Server test failed: server not found, id={$id}");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '服务器不存在'];
-                header('Location: ?action=servers');
-                exit;
-            }
+            if (!$server) { Logger::warning("Server test failed: server not found, id={$id}"); $_SESSION['flash'] = ['type' => 'error', 'message' => '服务器不存在']; header('Location: ?action=servers'); exit; }
             
             Logger::info("Testing server connection: id={$id}, name={$server['name']}, host={$server['host']}:{$server['port']}, user={$server['username']}");
             Logger::debug("Server password check: has_password=" . (isset($server['password']) && $server['password'] !== null && $server['password'] !== '' ? 'yes' : 'no') . ", password_length=" . (isset($server['password']) ? strlen($server['password']) : 0));
@@ -536,13 +350,7 @@ class Router {
                 Logger::debug("Password actually used: " . (isset($sshConfig['password']) && $sshConfig['password'] !== null && $sshConfig['password'] !== '' ? 'present(' . strlen($sshConfig['password']) . ' chars)' : 'not set'));
                 $exec = new SSHExecutor($sshConfig);
                 $ok = $exec->testConnection();
-                if ($ok) {
-                    Logger::info("Server connection test successful: id={$id}, name={$server['name']}");
-                    $_SESSION['flash'] = ['type' => 'success', 'message' => '连接成功'];
-                } else {
-                    Logger::error("Server connection test failed: id={$id}, name={$server['name']}");
-                    $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败'];
-                }
+                if ($ok) { Logger::info("Server connection test successful: id={$id}, name={$server['name']}"); $_SESSION['flash'] = ['type' => 'success', 'message' => '连接成功']; } else { Logger::error("Server connection test failed: id={$id}, name={$server['name']}"); $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败']; }
             } catch (Exception $e) {
                 Logger::error("Server connection test exception: id={$id}, name={$server['name']}, error=" . $e->getMessage() . ", trace=" . $e->getTraceAsString());
                 $_SESSION['flash'] = ['type' => 'error', 'message' => '连接失败：' . $e->getMessage()];
@@ -565,36 +373,13 @@ class Router {
             
             // 如果指定了 branch 参数，使用指定的；否则使用项目默认的
             $branch = null;
-            if (isset($_GET['branch']) && !empty(trim($_GET['branch']))) {
-                $branch = Validator::validateBranch(trim($_GET['branch']));
-            } else {
-                // 获取项目默认分支
-                $db = Database::getInstance();
-                $project = $db->fetchOne("SELECT branch FROM projects WHERE id = ?", [$projectId]);
-                if ($project) {
-                    $branch = $project['branch'];
-                } else {
-                    throw new InvalidArgumentException("项目不存在");
-                }
-            }
-            
+            if (isset($_GET['branch']) && !empty(trim($_GET['branch']))) { $branch = Validator::validateBranch(trim($_GET['branch'])); } else { $db = Database::getInstance(); $project = $db->fetchOne("SELECT branch FROM projects WHERE id = ?", [$projectId]); if ($project) { $branch = $project['branch']; } else { throw new InvalidArgumentException("项目不存在"); } }
             // 验证 CSRF Token（如果是 POST 请求）
-            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
-                Logger::warning("CSRF validation failed on deploy");
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
-                header('Location: ?action=projects');
-                exit;
-            }
-            
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) { Logger::warning("CSRF validation failed on deploy"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交']; header('Location: ?action=projects'); exit; }
             // 同步执行部署
             $deployer = new Deployer();
             $result = $deployer->deploy($projectId, $branch);
-            
-            if ($result['success']) {
-                $_SESSION['flash'] = ['type' => 'success', 'message' => '部署成功'];
-            } else {
-                $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')];
-            }
+            if ($result['success']) { $_SESSION['flash'] = ['type' => 'success', 'message' => '部署成功']; } else { $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')]; }
         } catch (InvalidArgumentException $e) {
             Logger::warning("Deploy validation failed: " . $e->getMessage());
             $_SESSION['flash'] = ['type' => 'error', 'message' => '参数错误: ' . $e->getMessage()];
@@ -613,17 +398,9 @@ class Router {
         $db = Database::getInstance();
         $projectId = $_GET['project_id'] ?? null;
         
-        $sql = "
-            SELECT d.*, p.name as project_name 
-            FROM deployments d 
-            JOIN projects p ON d.project_id = p.id 
-        ";
+        $sql = "SELECT d.*, p.name as project_name FROM deployments d JOIN projects p ON d.project_id = p.id";
         $params = [];
-        
-        if ($projectId) {
-            $sql .= " WHERE d.project_id = ?";
-            $params[] = $projectId;
-        }
+        if ($projectId) { $sql .= " WHERE d.project_id = ?"; $params[] = $projectId; }
         
         $sql .= " ORDER BY d.started_at DESC LIMIT 50";
         
@@ -644,97 +421,25 @@ class Router {
         $success = false;
         $required = isset($_GET['required']) && $_GET['required'] == '1';
         
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // 验证 CSRF Token
-            if (!CSRF::validate()) {
-                Logger::warning("CSRF validation failed on change password");
-                $error = '安全验证失败，请重新提交';
-            } else {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (!CSRF::validate()) { Logger::warning("CSRF validation failed on change password"); $error = '安全验证失败，请重新提交'; } else {
                 try {
                     $oldPassword = Validator::validatePassword($_POST['old_password'] ?? '', false);
                     $newPassword = Validator::validatePassword($_POST['new_password'] ?? '', false);
                     $confirmPassword = Validator::validatePassword($_POST['confirm_password'] ?? '', false);
                     
                     // 验证必填字段（validatePassword已经验证了，这里保留用于兼容性）
-                    if (empty($oldPassword)) {
-                        throw new InvalidArgumentException("旧密码不能为空");
-                    }
-                    if (empty($newPassword)) {
-                        throw new InvalidArgumentException("新密码不能为空");
-                    }
-                    if (empty($confirmPassword)) {
-                        throw new InvalidArgumentException("确认密码不能为空");
-                    }
-                    
+                    if (empty($oldPassword)) { throw new InvalidArgumentException("旧密码不能为空"); }
+                    if (empty($newPassword)) { throw new InvalidArgumentException("新密码不能为空"); }
+                    if (empty($confirmPassword)) { throw new InvalidArgumentException("确认密码不能为空"); }
                     // 验证新密码和确认密码是否一致
-                    if ($newPassword !== $confirmPassword) {
-                        throw new InvalidArgumentException("新密码和确认密码不一致");
-                    }
-                    
+                    if ($newPassword !== $confirmPassword) { throw new InvalidArgumentException("新密码和确认密码不一致"); }
                     // 验证新密码长度
-                    if (strlen($newPassword) < 8) {
-                        throw new InvalidArgumentException("新密码长度至少需要 8 个字符");
-                    }
-                    
+                    if (strlen($newPassword) < 8) { throw new InvalidArgumentException("新密码长度至少需要 8 个字符"); }
                     // 如果使用默认密码，允许使用旧密码 'admin' 或当前密码
                     $userId = $this->auth->getUserId();
-                    if ($this->auth->isDefaultPassword()) {
-                        // 对于默认密码用户，检查旧密码是否为 'admin'
-                        if ($oldPassword !== 'admin') {
-                            // 如果不是 'admin'，则验证当前密码
-                            $user = Database::getInstance()->fetchOne("SELECT * FROM users WHERE id = ?", [$userId]);
-                            if (!$user || !password_verify($oldPassword, $user['password'])) {
-                                throw new InvalidArgumentException("旧密码不正确");
-                            }
-                        }
-                        
-                        // 验证新密码不是默认密码
-                        if ($newPassword === 'admin') {
-                            throw new InvalidArgumentException("新密码不能使用默认密码");
-                        }
-                        
-                        // 直接更新密码（跳过旧密码验证，因为已经验证了）
-                        $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-                        Database::getInstance()->update('users', [
-                            'password' => $hashedPassword,
-                            'is_default_password' => 0
-                        ], 'id ' . '=' . ' ' . chr(63), [$userId]);
-                        
-                        // 更新 session
-                        $_SESSION['is_default_password'] = false;
-                        
-                        Logger::info("Password changed successfully for user ID: {$userId} (default password user)");
-                        CSRF::regenerateToken();
-                        
-                        // 如果是强制修改，跳转到仪表板
-                        if ($required) {
-                            $_SESSION['flash'] = ['type' => 'success', 'message' => '密码修改成功！'];
-                            header('Location: ?action=dashboard');
-                            exit;
-                        }
-                        
-                        $success = true;
-                        $error = null;
-                    } else {
-                        // 修改密码（非默认密码用户）
-                        $this->auth->changePassword($userId, $oldPassword, $newPassword);
-                        
-                        Logger::info("Password changed successfully for user ID: {$userId}");
-                        CSRF::regenerateToken();
-                        
-                        $success = true;
-                        $error = null;
-                    }
+                    if ($this->auth->isDefaultPassword()) { if ($oldPassword !== 'admin') { $user = Database::getInstance()->fetchOne("SELECT * FROM users WHERE id = ?", [$userId]); if (!$user || !password_verify($oldPassword, $user['password'])) { throw new InvalidArgumentException("旧密码不正确"); } } if ($newPassword === 'admin') { throw new InvalidArgumentException("新密码不能使用默认密码"); } $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT); Database::getInstance()->update('users', ['password' => $hashedPassword, 'is_default_password' => 0], 'id ' . '=' . ' ' . chr(63), [$userId]); $_SESSION['is_default_password'] = false; Logger::info("Password changed successfully for user ID: {$userId} (default password user)"); CSRF::regenerateToken(); if ($required) { $_SESSION['flash'] = ['type' => 'success', 'message' => '密码修改成功！']; header('Location: ?action=dashboard'); exit; } $success = true; $error = null; } else { $this->auth->changePassword($userId, $oldPassword, $newPassword); Logger::info("Password changed successfully for user ID: {$userId}"); CSRF::regenerateToken(); $success = true; $error = null; }
                     
-                } catch (InvalidArgumentException $e) {
-                    Logger::warning("Change password validation failed: " . $e->getMessage());
-                    $error = $e->getMessage();
-                } catch (Exception $e) {
-                    Logger::error("Change password failed: " . $e->getMessage());
-                    $error = '修改密码失败: ' . $e->getMessage();
-                }
-            }
-        }
+                } catch (InvalidArgumentException $e) { Logger::warning("Change password validation failed: " . $e->getMessage()); $error = $e->getMessage(); } catch (Exception $e) { Logger::error("Change password failed: " . $e->getMessage()); $error = '修改密码失败: ' . $e->getMessage(); } } }
         
         $this->renderChangePassword($error, $success, $required);
     }
@@ -775,27 +480,12 @@ class Router {
             $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
             $db = Database::getInstance();
             $deployment = $db->fetchOne("SELECT output, error, status FROM deployments WHERE id = ?", [$deploymentId]);
-            
-            if (!$deployment) {
-                $this->renderJson(['error' => 'Not found'], 404);
-                return;
-            }
-            
+            if (!$deployment) { $this->renderJson(['error' => 'Not found'], 404); return; }
             // 组合输出和错误信息
             $logContent = '';
-            if (!empty($deployment['output'])) {
-                $logContent .= $deployment['output'];
-            }
-            if (!empty($deployment['error'])) {
-                if (!empty($logContent)) {
-                    $logContent .= "\n\n";
-                }
-                $logContent .= "错误信息: " . $deployment['error'];
-            }
-            
-            if (empty($logContent)) {
-                $logContent = '暂无日志';
-            }
+            if (!empty($deployment['output'])) { $logContent .= $deployment['output']; }
+            if (!empty($deployment['error'])) { if (!empty($logContent)) { $logContent .= "\n\n"; } $logContent .= "错误信息: " . $deployment['error']; }
+            if (empty($logContent)) { $logContent = '暂无日志'; }
             
             $this->renderJson([
                 'output' => $logContent,
@@ -810,74 +500,39 @@ class Router {
 
     // 渲染方法
     private function renderLogin($error = null) {
-        $viewPath = __DIR__ . '/../ui/views/login.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: login.php";
-        }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('login', ['error' => $error]); } else { $viewPath = __DIR__ . '/../ui/views/login.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: login.php"; } }
     }
 
     private function renderDashboard($projects, $deployments, $envCheck = []) {
-        $viewPath = __DIR__ . '/../ui/views/dashboard.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: dashboard.php";
-        }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('dashboard', ['projects' => $projects, 'deployments' => $deployments, 'envCheck' => $envCheck]); } else { $viewPath = __DIR__ . '/../ui/views/dashboard.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: dashboard.php"; } }
     }
 
     private function renderProjects($projects) {
-        $viewPath = __DIR__ . '/../ui/views/projects.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: projects.php";
-        }
+        if (class_exists('SecurityOutput')) { $projects = SecurityOutput::escapeArray($projects); }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('projects', ['projects' => $projects]); } else { $viewPath = __DIR__ . '/../ui/views/projects.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: projects.php"; } }
     }
 
     private function renderProjectEdit($project, $servers) {
-        $viewPath = __DIR__ . '/../ui/views/project_edit.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: project_edit.php";
-        }
+        if (class_exists('SecurityOutput')) { if ($project) { $project = SecurityOutput::escapeArray($project); } $servers = SecurityOutput::escapeArray($servers); }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('project_edit', ['project' => $project, 'servers' => $servers]); } else { $viewPath = __DIR__ . '/../ui/views/project_edit.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: project_edit.php"; } }
     }
 
     private function renderServers($servers) {
-        $viewPath = __DIR__ . '/../ui/views/servers.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: servers.php";
-        }
+        if (class_exists('SecurityOutput')) { $servers = SecurityOutput::escapeArray($servers); }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('servers', ['servers' => $servers]); } else { $viewPath = __DIR__ . '/../ui/views/servers.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: servers.php"; } }
     }
 
     private function renderServerEdit($server) {
-        $viewPath = __DIR__ . '/../ui/views/server_edit.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: server_edit.php";
-        }
+        if (class_exists('SecurityOutput') && $server) { $server = SecurityOutput::escapeArray($server); }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('server_edit', ['server' => $server]); } else { $viewPath = __DIR__ . '/../ui/views/server_edit.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: server_edit.php"; } }
     }
 
     private function renderChangePassword($error = null, $success = false, $required = false) {
-        $viewPath = __DIR__ . '/../ui/views/change_password.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: change_password.php";
-        }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('change_password', ['error' => $error, 'success' => $success, 'required' => $required]); } else { $viewPath = __DIR__ . '/../ui/views/change_password.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: change_password.php"; } }
     }
     private function renderDeployments($deployments) {
-        $viewPath = __DIR__ . '/../ui/views/deployments.php';
-        if (file_exists($viewPath)) {
-            include $viewPath;
-        } else {
-            echo "View file not found: deployments.php";
-        }
+        if (class_exists('SecurityOutput')) { $deployments = SecurityOutput::escapeArray($deployments); }
+        if (class_exists('ViewRenderer')) { ViewRenderer::render('deployments', ['deployments' => $deployments]); } else { $viewPath = __DIR__ . '/../ui/views/deployments.php'; if (file_exists($viewPath)) { include $viewPath; } else { echo "View file not found: deployments.php"; } }
     }
     private function renderJson($data, $statusCode = 200) {
         http_response_code($statusCode);

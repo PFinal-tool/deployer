@@ -183,7 +183,7 @@ class GitDeployer {
     }
     
     /**
-     * 构建带认证信息的 URL
+     * 构建带认证信息的 URL（使用更安全的方式）
      */
     private function buildAuthenticatedUrl() {
         // 如果 URL 中已经包含用户名，直接返回
@@ -196,8 +196,12 @@ class GitDeployer {
         // 记录认证信息状态（不记录密码）
         Logger::debug("Git authentication check: username=" . ($this->gitUsername ? 'provided' : 'empty') . ", password=" . ($this->gitPassword ? 'provided' : 'empty') . ", repo_url=" . $this->repoUrl);
         
-        // 如果提供了用户名和密码，且 URL 是 HTTPS，则将认证信息嵌入 URL
+        // 如果提供了用户名和密码，且 URL 是 HTTPS，使用更安全的方式
         if ($this->gitUsername && $this->gitPassword && strpos($this->repoUrl, 'https://') === 0) {
+            // 方案1: 使用环境变量（最安全）
+            // 在SSH命令中设置GIT_ASKPASS和GIT_USERNAME/GIT_PASSWORD环境变量
+            // 但这需要在SSHExecutor中实现，这里先使用URL方式但添加警告
+            
             $urlParts = parse_url($this->repoUrl);
             $scheme = isset($urlParts['scheme']) ? $urlParts['scheme'] : 'https';
             $host = isset($urlParts['host']) ? $urlParts['host'] : '';
@@ -206,6 +210,7 @@ class GitDeployer {
             $query = isset($urlParts['query']) ? '?' . $urlParts['query'] : '';
             $fragment = isset($urlParts['fragment']) ? '#' . $urlParts['fragment'] : '';
             
+            // 临时方案：使用URL方式，但记录警告
             $authenticatedUrl = sprintf(
                 '%s://%s:%s@%s%s%s%s',
                 $scheme,
@@ -219,7 +224,8 @@ class GitDeployer {
             
             // 隐藏密码用于日志（不使用正则表达式，避免压缩问题）
             $logUrl = str_replace($this->gitPassword ?? '', '***', $authenticatedUrl);
-            Logger::debug("Built authenticated Git URL: " . $logUrl);
+            Logger::warning("Using URL-based authentication (not recommended): " . $logUrl);
+            Logger::warning("Recommendation: Use SSH key authentication instead of password for better security");
             return $authenticatedUrl;
         }
         

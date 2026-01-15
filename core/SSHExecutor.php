@@ -27,184 +27,193 @@ class SSHExecutor {
      * 执行 SSH 命令
      */
     public function execute($command, $callback = null) {
-        $sshCommand = $this->buildSSHCommand($command);
-        
-        Logger::info("Executing SSH command: host={$this->host}, port={$this->port}, user={$this->username}, command={$command}");
-        Logger::debug("SSH command line: " . str_replace($this->password ?? '', '***', $sshCommand));
-        
-        $descriptorspec = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w']
-        ];
-        
-        // 设置环境变量，确保能找到 sshpass 等工具
-        $envPath = getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin';
-        $env = [
-            'PATH' => $envPath . ':/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin'
-        ];
-        
-        // 如果命令包含 sshpass 的完整路径，只在 CLI 环境中且文件不存在时才替换
-        // 在 Web 环境中，即使 file_exists() 返回 false，也保留完整路径（因为检测时已经确定使用该路径）
-        if (preg_match("/['\"]?(\/.*?\/sshpass)['\"]?\s+/", $sshCommand, $matches)) {
-            $fullPath = $matches[1];
-            Logger::debug("Detected sshpass full path in command: {$fullPath}");
-            // 只在 CLI 环境中且文件真的不存在时才替换为命令名
-            if (php_sapi_name() === 'cli' && !@file_exists($fullPath)) {
-                Logger::debug("sshpass full path {$fullPath} not found in CLI, trying command name with PATH");
-                $sshCommand = preg_replace("/['\"]?\/.*?\/sshpass['\"]?/", 'sshpass', $sshCommand);
-                Logger::debug("Modified SSH command: " . str_replace($this->password ?? '', '***', $sshCommand));
-            } else {
-                Logger::debug("Keeping full path {$fullPath} (Web environment or file exists)");
-            }
-        }
-        
-        // 如果命令使用 sshpass 命令名（不是完整路径），在命令前显式设置 PATH
-        if (preg_match("/\bsshpass\s+/", $sshCommand) && strpos($sshCommand, '/sshpass') === false) {
-            $envPathStr = escapeshellarg($env['PATH']);
-            // 使用 sh -c 来执行命令，确保 PATH 环境变量被正确使用
-            // 注意：在 && 前后都要有空格，避免被压缩掉
-            $sshCommand = sprintf("sh -c %s", escapeshellarg("export PATH={$envPathStr} && " . trim($sshCommand)));
-            Logger::debug("Added explicit PATH to command: " . str_replace($this->password ?? '', '***', $sshCommand));
-        }
-        
-        // 仍然设置环境变量，但也在命令中显式使用 env
-        $process = proc_open($sshCommand, $descriptorspec, $pipes, null, $env);
-        
-        if (!is_resource($process)) {
-            Logger::error("Failed to open SSH process: host={$this->host}, command={$command}");
-            throw new Exception("Failed to execute SSH command");
-        }
-        
-        $output = '';
-        $errorOutput = '';
-        
-        // 设置非阻塞模式
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-        
-        $startTime = time();
-        
-        while (true) {
-            $read = [$pipes[1], $pipes[2]];
-            $write = null;
-            $except = null;
+        $tempKeyFile = null;
+        try {
+            $sshCommand = $this->buildSSHCommand($command, $tempKeyFile);
             
-            $changed = stream_select($read, $write, $except, 1);
+            Logger::info("Executing SSH command: host={$this->host}, port={$this->port}, user={$this->username}, command={$command}");
+            Logger::debug("SSH command line: " . str_replace($this->password ?? '', '***', $sshCommand));
             
-            if ($changed > 0) {
-                foreach ($read as $pipe) {
-                    $data = stream_get_contents($pipe);
-                    if ($pipe === $pipes[1]) {
-                        $output .= $data;
-                        if ($callback && $data) {
-                            call_user_func($callback, $data, 'stdout');
-                        }
-                    } elseif ($pipe === $pipes[2]) {
-                        $errorOutput .= $data;
-                        if ($callback && $data) {
-                            call_user_func($callback, $data, 'stderr');
-                        }
-                    }
+            $descriptorspec = [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w']
+            ];
+            
+            // 设置环境变量，确保能找到 sshpass 等工具
+            $envPath = getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin';
+            $env = [
+                'PATH' => $envPath . ':/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin'
+            ];
+            
+            // 如果命令包含 sshpass 的完整路径，只在 CLI 环境中且文件不存在时才替换
+            // 在 Web 环境中，即使 file_exists() 返回 false，也保留完整路径（因为检测时已经确定使用该路径）
+            if (preg_match("/['\"]?(\/.*?\/sshpass)['\"]?\s+/", $sshCommand, $matches)) {
+                $fullPath = $matches[1];
+                Logger::debug("Detected sshpass full path in command: {$fullPath}");
+                // 只在 CLI 环境中且文件真的不存在时才替换为命令名
+                if (php_sapi_name() === 'cli' && !@file_exists($fullPath)) {
+                    Logger::debug("sshpass full path {$fullPath} not found in CLI, trying command name with PATH");
+                    $sshCommand = preg_replace("/['\"]?\/.*?\/sshpass['\"]?/", 'sshpass', $sshCommand);
+                    Logger::debug("Modified SSH command: " . str_replace($this->password ?? '', '***', $sshCommand));
+                } else {
+                    Logger::debug("Keeping full path {$fullPath} (Web environment or file exists)");
                 }
             }
             
-            // 检查进程状态
-            $status = proc_get_status($process);
-            
-            if (!$status['running']) {
-                break;
-            }
-            
-            // 检查超时
-            if (time() - $startTime > $this->timeout) {
-                Logger::warning("SSH command timeout: host={$this->host}, command={$command}, elapsed=" . (time() - $startTime) . "s");
-                proc_terminate($process);
-                throw new Exception("SSH command timeout after {$this->timeout} seconds");
-            }
-            
-            usleep(100000); // 100ms
-        }
-        
-        // 读取剩余输出
-        $output .= stream_get_contents($pipes[1]);
-        $errorOutput .= stream_get_contents($pipes[2]);
-        
-        fclose($pipes[0]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        
-        $returnCode = proc_close($process);
-        
-        // 如果使用完整路径失败（code 127 通常表示命令未找到），尝试使用命令名 + PATH
-        if ($returnCode === 127 && preg_match("/['\"]?(\/.*?\/sshpass)['\"]?\s+/", $sshCommand, $matches)) {
-            $fullPath = $matches[1];
-            Logger::warning("Full path {$fullPath} failed (code 127), trying command name with PATH");
-            // 重新构建命令，使用命令名
-            $sshCommand = preg_replace("/['\"]?\/.*?\/sshpass['\"]?/", 'sshpass', $this->buildSSHCommand($command));
-            // 添加 PATH 设置
-            if (strpos($sshCommand, '/sshpass') === false) {
+            // 如果命令使用 sshpass 命令名（不是完整路径），在命令前显式设置 PATH
+            if (preg_match("/\bsshpass\s+/", $sshCommand) && strpos($sshCommand, '/sshpass') === false) {
                 $envPathStr = escapeshellarg($env['PATH']);
+                // 使用 sh -c 来执行命令，确保 PATH 环境变量被正确使用
+                // 注意：在 && 前后都要有空格，避免被压缩掉
                 $sshCommand = sprintf("sh -c %s", escapeshellarg("export PATH={$envPathStr} && " . trim($sshCommand)));
+                Logger::debug("Added explicit PATH to command: " . str_replace($this->password ?? '', '***', $sshCommand));
             }
-            Logger::debug("Retrying with command name: " . str_replace($this->password ?? '', '***', $sshCommand));
             
-            // 重试执行
+            // 仍然设置环境变量，但也在命令中显式使用 env
             $process = proc_open($sshCommand, $descriptorspec, $pipes, null, $env);
-            if (is_resource($process)) {
-                stream_set_blocking($pipes[1], false);
-                stream_set_blocking($pipes[2], false);
-                $startTime = time();
-                $output = '';
-                $errorOutput = '';
+            
+            if (!is_resource($process)) {
+                Logger::error("Failed to open SSH process: host={$this->host}, command={$command}");
+                throw new Exception("Failed to execute SSH command");
+            }
+            
+            $output = '';
+            $errorOutput = '';
+            
+            // 设置非阻塞模式
+            stream_set_blocking($pipes[1], false);
+            stream_set_blocking($pipes[2], false);
+            
+            $startTime = time();
+            
+            while (true) {
+                $read = [$pipes[1], $pipes[2]];
+                $write = null;
+                $except = null;
                 
-                while (true) {
-                    $read = [$pipes[1], $pipes[2]];
-                    $write = null;
-                    $except = null;
-                    $changed = stream_select($read, $write, $except, 1);
-                    if ($changed > 0) {
-                        foreach ($read as $pipe) {
-                            $data = stream_get_contents($pipe);
-                            if ($pipe === $pipes[1]) {
-                                $output .= $data;
-                            } elseif ($pipe === $pipes[2]) {
-                                $errorOutput .= $data;
+                $changed = stream_select($read, $write, $except, 1);
+                
+                if ($changed > 0) {
+                    foreach ($read as $pipe) {
+                        $data = stream_get_contents($pipe);
+                        if ($pipe === $pipes[1]) {
+                            $output .= $data;
+                            if ($callback && $data) {
+                                call_user_func($callback, $data, 'stdout');
+                            }
+                        } elseif ($pipe === $pipes[2]) {
+                            $errorOutput .= $data;
+                            if ($callback && $data) {
+                                call_user_func($callback, $data, 'stderr');
                             }
                         }
                     }
-                    $status = proc_get_status($process);
-                    if (!$status['running']) {
-                        break;
-                    }
-                    if (time() - $startTime > $this->timeout) {
-                        proc_terminate($process);
-                        throw new Exception("SSH command timeout after {$this->timeout} seconds");
-                    }
-                    usleep(100000);
                 }
-                $output .= stream_get_contents($pipes[1]);
-                $errorOutput .= stream_get_contents($pipes[2]);
-                fclose($pipes[0]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                $returnCode = proc_close($process);
+                
+                // 检查进程状态
+                $status = proc_get_status($process);
+                
+                if (!$status['running']) {
+                    break;
+                }
+                
+                // 检查超时
+                if (time() - $startTime > $this->timeout) {
+                    Logger::warning("SSH command timeout: host={$this->host}, command={$command}, elapsed=" . (time() - $startTime) . "s");
+                    proc_terminate($process);
+                    throw new Exception("SSH command timeout after {$this->timeout} seconds");
+                }
+                
+                usleep(100000); // 100ms
+            }
+            
+            // 读取剩余输出
+            $output .= stream_get_contents($pipes[1]);
+            $errorOutput .= stream_get_contents($pipes[2]);
+            
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            
+            $returnCode = proc_close($process);
+            
+            // 如果使用完整路径失败（code 127 通常表示命令未找到），尝试使用命令名 + PATH
+            if ($returnCode === 127 && preg_match("/['\"]?(\/.*?\/sshpass)['\"]?\s+/", $sshCommand, $matches)) {
+                $fullPath = $matches[1];
+                Logger::warning("Full path {$fullPath} failed (code 127), trying command name with PATH");
+                // 重新构建命令，使用命令名
+                $sshCommand = preg_replace("/['\"]?\/.*?\/sshpass['\"]?/", 'sshpass', $this->buildSSHCommand($command, $tempKeyFile));
+                // 添加 PATH 设置
+                if (strpos($sshCommand, '/sshpass') === false) {
+                    $envPathStr = escapeshellarg($env['PATH']);
+                    $sshCommand = sprintf("sh -c %s", escapeshellarg("export PATH={$envPathStr} && " . trim($sshCommand)));
+                }
+                Logger::debug("Retrying with command name: " . str_replace($this->password ?? '', '***', $sshCommand));
+                
+                // 重试执行
+                $process = proc_open($sshCommand, $descriptorspec, $pipes, null, $env);
+                if (is_resource($process)) {
+                    stream_set_blocking($pipes[1], false);
+                    stream_set_blocking($pipes[2], false);
+                    $startTime = time();
+                    $output = '';
+                    $errorOutput = '';
+                    
+                    while (true) {
+                        $read = [$pipes[1], $pipes[2]];
+                        $write = null;
+                        $except = null;
+                        $changed = stream_select($read, $write, $except, 1);
+                        if ($changed > 0) {
+                            foreach ($read as $pipe) {
+                                $data = stream_get_contents($pipe);
+                                if ($pipe === $pipes[1]) {
+                                    $output .= $data;
+                                } elseif ($pipe === $pipes[2]) {
+                                    $errorOutput .= $data;
+                                }
+                            }
+                        }
+                        $status = proc_get_status($process);
+                        if (!$status['running']) {
+                            break;
+                        }
+                        if (time() - $startTime > $this->timeout) {
+                            proc_terminate($process);
+                            throw new Exception("SSH command timeout after {$this->timeout} seconds");
+                        }
+                        usleep(100000);
+                    }
+                    $output .= stream_get_contents($pipes[1]);
+                    $errorOutput .= stream_get_contents($pipes[2]);
+                    fclose($pipes[0]);
+                    fclose($pipes[1]);
+                    fclose($pipes[2]);
+                    $returnCode = proc_close($process);
+                }
+            }
+            
+            if ($returnCode !== 0) {
+                Logger::error("SSH command failed: host={$this->host}, command={$command}, code={$returnCode}, error={$errorOutput}");
+                throw new Exception("SSH command failed: {$errorOutput}");
+            }
+            
+            Logger::debug("SSH command success: host={$this->host}, command={$command}, output_length=" . strlen($output));
+            return $output;
+        } finally {
+            // 确保删除临时密钥文件
+            if ($tempKeyFile && file_exists($tempKeyFile)) {
+                @unlink($tempKeyFile);
+                Logger::debug("Temporary SSH key file deleted: {$tempKeyFile}");
             }
         }
-        
-        if ($returnCode !== 0) {
-            Logger::error("SSH command failed: host={$this->host}, command={$command}, code={$returnCode}, error={$errorOutput}");
-            throw new Exception("SSH command failed: {$errorOutput}");
-        }
-        
-        Logger::debug("SSH command success: host={$this->host}, command={$command}, output_length=" . strlen($output));
-        return $output;
     }
     
     /**
      * 构建 SSH 命令
      */
-    private function buildSSHCommand($command) {
+    private function buildSSHCommand($command, &$tempKeyFile = null) {
         $sshOptions = [
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=/dev/null',
