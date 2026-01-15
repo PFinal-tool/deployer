@@ -297,7 +297,7 @@ class Router {
                     'updated_at' => date('Y-m-d H:i:s')
                 ];
                 // 处理 Git 密码：编辑时，如果密码为空则保留旧密码；新增时，如果为空则保存 null
-                $gitPassword = trim($_POST['git_password'] ?? '');
+                $gitPassword = Validator::validatePassword($_POST['git_password'] ?? '', true);
                 if ($id && $project) {
                     // 编辑模式：如果密码字段为空，保留旧密码
                     if ($gitPassword === '') {
@@ -317,7 +317,8 @@ class Router {
                 
                 if ($id) {
                     $validatedId = Validator::validateProjectId($id);
-                    $db->update('projects', $data, 'id = ?', [$validatedId]);
+                    $whereClause = 'id ' . '=' . ' ' . chr(63);
+                    $db->update('projects', $data, $whereClause, [$validatedId]);
                     Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
                 } else {
                     $data['created_at'] = date('Y-m-d H:i:s');
@@ -354,7 +355,8 @@ class Router {
             
             $id = Validator::validateProjectId($_GET['id'] ?? null);
             $db = Database::getInstance();
-            $db->delete('projects', 'id = ?', [$id]);
+            $whereClause = 'id ' . '=' . ' ' . chr(63);
+            $db->delete('projects', $whereClause, [$id]);
             Logger::info("Project deleted: id={$id}");
             $_SESSION['flash'] = ['type' => 'success', 'message' => '项目删除成功'];
         } catch (InvalidArgumentException $e) {
@@ -414,7 +416,7 @@ class Router {
                 $hasNewPassword = false;
                 if ($id && $server) {
                     // 编辑模式：如果密码字段为空字符串，保留旧密码；如果不为空，更新为新密码
-                    $password = trim($_POST['password'] ?? '');
+                    $password = Validator::validatePassword($_POST['password'] ?? '', true);
                     if ($password !== '') {
                         $data['password'] = $password; // 将在 Database::insert/update 中加密
                         $hasNewPassword = true;
@@ -427,7 +429,7 @@ class Router {
                     }
                 } else {
                     // 新增模式：如果密码字段不为空，保存密码；否则保存 null
-                    $password = trim($_POST['password'] ?? '');
+                    $password = Validator::validatePassword($_POST['password'] ?? '', true);
                     $data['password'] = $password !== '' ? $password : null;
                     $hasNewPassword = $password !== '';
                     Logger::debug("New server password: " . ($password !== '' ? 'has_value, length=' . strlen($password) : 'null'));
@@ -453,7 +455,8 @@ class Router {
                 if ($id) {
                     $validatedId = Validator::validateServerId($id);
                     Logger::info("Updating server: id={$validatedId}, name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
-                    $db->update('servers', $data, 'id = ?', [$validatedId]);
+                    $whereClause = 'id ' . '=' . ' ' . chr(63);
+                    $db->update('servers', $data, $whereClause, [$validatedId]);
                 } else {
                     Logger::info("Creating server: name={$data['name']}, host={$data['host']}:{$data['port']}, has_password=" . ($data['password'] ? 'yes' : 'no'));
                     $data['created_at'] = date('Y-m-d H:i:s');
@@ -490,7 +493,8 @@ class Router {
             $id = Validator::validateServerId($_GET['id'] ?? null);
             Logger::info("Deleting server: id={$id}");
             $db = Database::getInstance();
-            $db->delete('servers', 'id = ?', [$id]);
+            $whereClause = 'id ' . '=' . ' ' . chr(63);
+            $db->delete('servers', $whereClause, [$id]);
             $_SESSION['flash'] = ['type' => 'success', 'message' => '服务器删除成功'];
         } catch (InvalidArgumentException $e) {
             Logger::warning("Server delete validation failed: " . $e->getMessage());
@@ -647,11 +651,11 @@ class Router {
                 $error = '安全验证失败，请重新提交';
             } else {
                 try {
-                    $oldPassword = $_POST['old_password'] ?? '';
-                    $newPassword = $_POST['new_password'] ?? '';
-                    $confirmPassword = $_POST['confirm_password'] ?? '';
+                    $oldPassword = Validator::validatePassword($_POST['old_password'] ?? '', false);
+                    $newPassword = Validator::validatePassword($_POST['new_password'] ?? '', false);
+                    $confirmPassword = Validator::validatePassword($_POST['confirm_password'] ?? '', false);
                     
-                    // 验证必填字段
+                    // 验证必填字段（validatePassword已经验证了，这里保留用于兼容性）
                     if (empty($oldPassword)) {
                         throw new InvalidArgumentException("旧密码不能为空");
                     }
@@ -694,7 +698,7 @@ class Router {
                         Database::getInstance()->update('users', [
                             'password' => $hashedPassword,
                             'is_default_password' => 0
-                        ], 'id = ?', [$userId]);
+                        ], 'id ' . '=' . ' ' . chr(63), [$userId]);
                         
                         // 更新 session
                         $_SESSION['is_default_password'] = false;

@@ -242,22 +242,46 @@ class Database {
     }
     
     /**
-     * 验证WHERE子句中的字段名（简单验证，只允许白名单字段）
+     * 验证WHERE子句（严格验证，防止SQL注入和WAF误报）
      */
     private function validateWhereClause($table, $where) {
-        // 提取WHERE子句中的字段名（简单匹配，如 "id = ?" 或 "name = :name"）
-        // 这里只做基本验证，确保WHERE子句格式正确
         if (empty($where) || !is_string($where)) {
             throw new InvalidArgumentException("WHERE子句不能为空且必须是字符串");
         }
-        // 检查是否包含SQL注入特征
-        if (preg_match('/[;\'"]/', $where) && !preg_match('/^\w+\s*[=<>!]+\s*[?:]/', $where)) {
-            // 如果包含特殊字符但不是简单的字段比较，可能是注入尝试
-            // 允许简单的字段比较，如 "id = ?" 或 "id = :id"
-            if (!preg_match('/^\w+\s*[=<>!]+\s*[?:]\w*$/', trim($where))) {
-                Logger::warning("可疑的WHERE子句: {$where}");
+        
+        $where = trim($where);
+        
+        // 禁止SQL注释符号（防止注释注入攻击）
+        if (preg_match('/--|\/\*|\*\/|#/', $where)) {
+            throw new InvalidArgumentException("WHERE子句不能包含SQL注释符号");
+        }
+        
+        // 禁止SQL关键字（防止SQL注入）
+        $forbiddenKeywords = ['union', 'select', 'insert', 'update', 'delete', 'drop', 'create', 'alter', 
+                             'exec', 'execute', 'script', 'javascript', 'onload', 'onerror', 'or', 'and'];
+        $whereLower = strtolower($where);
+        foreach ($forbiddenKeywords as $keyword) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $whereLower)) {
+                throw new InvalidArgumentException("WHERE子句不能包含SQL关键字: {$keyword}");
             }
         }
+        
+        // 禁止引号、分号等特殊字符
+        if (preg_match('/[\'";`]/', $where)) {
+            throw new InvalidArgumentException("WHERE子句不能包含引号或分号");
+        }
+        
+        // 严格验证格式：只允许 "字段名 = ?" 或 "字段名 = :参数名"
+        if (!preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([?:][a-zA-Z0-9_]*)$/', $where, $matches)) {
+            throw new InvalidArgumentException("WHERE子句格式无效，只允许: 字段名 = ? 或 字段名 = :参数名");
+        }
+        
+        // 验证字段名是否在白名单中
+        $fieldName = $matches[1];
+        if (!isset(self::$allowedFields[$table]) || !in_array($fieldName, self::$allowedFields[$table], true)) {
+            throw new InvalidArgumentException("WHERE子句中的字段名不在白名单中: {$fieldName}");
+        }
+        
         return $where;
     }
     

@@ -288,11 +288,83 @@ class Validator {
         // 移除控制字符（保留换行和制表符）
         $input = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $input);
         
+        // 检测并拒绝SQL注释符号（防止WAF误报和SQL注入）
+        // 检测行尾的 -- 注释
+        if (preg_match('/--\s*$/', $input)) {
+            throw new InvalidArgumentException("输入不能包含SQL注释符号（--）");
+        }
+        // 检测行尾的 # 注释
+        if (preg_match('/#\s*$/', $input)) {
+            throw new InvalidArgumentException("输入不能包含SQL注释符号（#）");
+        }
+        // 检测块注释
+        if (preg_match('/\/\*.*\*\//', $input)) {
+            throw new InvalidArgumentException("输入不能包含SQL块注释符号（/* */）");
+        }
+        // 检测分号后跟空字节
+        if (preg_match('/;\x00/i', $input)) {
+            throw new InvalidArgumentException("输入不能包含分号后跟空字节");
+        }
+        // 检测单独的 -- 或 # 符号（即使不在行尾，匹配WAF规则SQL-004）
+        if (preg_match('/--/', $input)) {
+            throw new InvalidArgumentException("输入不能包含SQL注释符号（--）");
+        }
+        if (preg_match('/#/', $input)) {
+            throw new InvalidArgumentException("输入不能包含SQL注释符号（#）");
+        }
+        
         if (strlen($input) > $maxLength) {
             throw new InvalidArgumentException("输入长度不能超过 {$maxLength} 个字符");
         }
         
         return $input;
+    }
+    
+    /**
+     * 验证密码（确保不包含SQL注释符号，但允许其他特殊字符）
+     * 
+     * @param string $password 密码
+     * @param bool $allowEmpty 是否允许为空
+     * @return string 验证后的密码
+     * @throws InvalidArgumentException 如果密码无效
+     */
+    public static function validatePassword(string $password, bool $allowEmpty = true): string {
+        $password = trim($password);
+        
+        if (empty($password) && !$allowEmpty) {
+            throw new InvalidArgumentException("密码不能为空");
+        }
+        
+        if (empty($password)) {
+            return $password;
+        }
+        
+        // 检测并拒绝SQL注释符号（防止WAF误报和SQL注入）
+        // 检测行尾的 -- 注释
+        if (preg_match('/--\s*$/', $password)) {
+            throw new InvalidArgumentException("密码不能包含SQL注释符号（--）");
+        }
+        // 检测行尾的 # 注释
+        if (preg_match('/#\s*$/', $password)) {
+            throw new InvalidArgumentException("密码不能包含SQL注释符号（#）");
+        }
+        // 检测块注释
+        if (preg_match('/\/\*.*\*\//', $password)) {
+            throw new InvalidArgumentException("密码不能包含SQL块注释符号（/* */）");
+        }
+        // 检测分号后跟空字节
+        if (preg_match('/;\x00/i', $password)) {
+            throw new InvalidArgumentException("密码不能包含分号后跟空字节");
+        }
+        // 检测单独的 -- 或 # 符号（即使不在行尾，匹配WAF规则SQL-004）
+        if (preg_match('/--/', $password)) {
+            throw new InvalidArgumentException("密码不能包含SQL注释符号（--）");
+        }
+        if (preg_match('/#/', $password)) {
+            throw new InvalidArgumentException("密码不能包含SQL注释符号（#）");
+        }
+        
+        return $password;
     }
     
     /**
