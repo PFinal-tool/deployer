@@ -13,9 +13,7 @@ class SecurityOutput {
      * @return string 转义后的字符串
      */
     public static function escape($string, $flags = ENT_QUOTES, $encoding = 'UTF-8') {
-        if ($string === null) {
-            return '';
-        }
+        if ($string === null) { return ''; }
         return htmlspecialchars($string, $flags, $encoding);
     }
     
@@ -26,9 +24,7 @@ class SecurityOutput {
      * @return string 转义后的字符串
      */
     public static function escapeAttr($string) {
-        if ($string === null) {
-            return '';
-        }
+        if ($string === null) { return ''; }
         return htmlspecialchars($string, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
     
@@ -39,9 +35,7 @@ class SecurityOutput {
      * @return string 转义后的URL
      */
     public static function escapeUrl($url) {
-        if ($url === null) {
-            return '';
-        }
+        if ($url === null) { return ''; }
         return htmlspecialchars($url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
     
@@ -52,9 +46,7 @@ class SecurityOutput {
      * @return string 转义后的字符串
      */
     public static function escapeJs($string) {
-        if ($string === null) {
-            return '';
-        }
+        if ($string === null) { return ''; }
         return json_encode($string, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
     }
     
@@ -65,19 +57,11 @@ class SecurityOutput {
      * @return array 转义后的数组
      */
     public static function escapeArray($data) {
-        if (!is_array($data)) {
-            return self::escape($data);
-        }
-        
+        if (!is_array($data)) { return self::escape($data); }
         $escaped = [];
         foreach ($data as $key => $value) {
-            if (is_array($value)) {
-                $escaped[$key] = self::escapeArray($value);
-            } else {
-                $escaped[$key] = self::escape($value);
-            }
+            if (is_array($value)) { $escaped[$key] = self::escapeArray($value); } else { $escaped[$key] = self::escape($value); }
         }
-        
         return $escaped;
     }
     
@@ -89,15 +73,8 @@ class SecurityOutput {
      * @return string 过滤后的HTML
      */
     public static function escapeHtml($html, $allowedTags = null) {
-        if ($html === null) {
-            return '';
-        }
-        
-        // 如果没有指定允许的标签，默认允许基本格式化标签
-        if ($allowedTags === null) {
-            $allowedTags = '<p><br><strong><em><u><ol><ul><li><a><h1><h2><h3><h4><h5><h6><pre><code>';
-        }
-        
+        if ($html === null) { return ''; }
+        if ($allowedTags === null) { $allowedTags = '<p><br><strong><em><u><ol><ul><li><a><h1><h2><h3><h4><h5><h6><pre><code>'; }
         return strip_tags($html, $allowedTags);
     }
 }

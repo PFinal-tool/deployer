@@ -1,62 +1,167 @@
 <?php
 /**
- * 简单路由处理类
+ * 路由处理类
+ * 负责路由分发到对应的控制器
  */
 class Router {
     private $auth;
+    private $controllers = [];
+    
     public function __construct() {
         $this->auth = new Auth();
-    }
-    public function handle() {
-        $action = $_GET['action'] ?? 'dashboard';   
-        // 公开路由（无需登录）
-        $publicActions = ['login', 'logout'];
-        // 需要登录的路由（包括 API）
-        if (!in_array($action, $publicActions) && $action !== 'login') {$this->auth->requireLogin();}
-        // 如果使用默认密码，只能访问修改密码页面和退出登录
-        if ($this->auth->isLoggedIn() && $this->auth->isDefaultPassword() && $action !== 'change_password' && $action !== 'logout') {header('Location: ?action=change_password&required=1');exit;}
-        switch ($action) {
-            case 'login':
-                $this->handleLogin();break;
-            case 'logout':
-                $this->handleLogout();break;
-            case 'dashboard':
-                $this->handleDashboard();break;
-            case 'projects':
-                $this->handleProjects();break;
-            case 'project_edit':
-                $this->handleProjectEdit();break;
-            case 'project_delete':
-                $this->handleProjectDelete();break;
-            case 'servers':
-                $this->handleServers();break;
-            case 'server_edit':
-                $this->handleServerEdit();break;
-            case 'server_delete':
-                $this->handleServerDelete();break;
-            case 'server_test':
-                $this->handleServerTest();break;
-            case 'deploy':
-                $this->handleDeploy();break;
-            case 'deployments':
-                $this->handleDeployments();break;
-            case 'webhook':
-                $this->handleWebhook();break;
-            case 'api':
-                $this->handleApi();break;
-            case 'change_password':
-                $this->handleChangePassword();break;
-            default:
-                $this->handleDashboard();
+        
+        // 延迟加载控制器（如果类存在）
+        if (class_exists('AuthController')) {
+            $this->controllers['auth'] = new AuthController();
+        }
+        if (class_exists('ProjectController')) {
+            $this->controllers['project'] = new ProjectController();
+        }
+        if (class_exists('ServerController')) {
+            $this->controllers['server'] = new ServerController();
+        }
+        if (class_exists('DeploymentController')) {
+            $this->controllers['deployment'] = new DeploymentController();
+        }
+        if (class_exists('ApiController')) {
+            $this->controllers['api'] = new ApiController();
         }
     }
+    
+    public function handle() {
+        $action = $_GET['action'] ?? 'dashboard';   
+        
+        // 公开路由（无需登录）
+        $publicActions = ['login', 'logout'];
+        if (!in_array($action, $publicActions) && $action !== 'login') {
+            $this->auth->requireLogin();
+        }
+        
+        // 如果使用默认密码，只能访问修改密码页面和退出登录
+        if ($this->auth->isLoggedIn() && $this->auth->isDefaultPassword() 
+            && $action !== 'change_password' && $action !== 'logout') {
+            header('Location: ?action=change_password&required=1');
+            exit;
+        }
+        
+        // 路由分发
+        $this->dispatch($action);
+    }
+    
+    /**
+     * 路由分发
+     */
+    private function dispatch($action) {
+        // 路由映射表：action => [controller, method]
+        $routes = [
+            'login' => ['auth', 'login'],
+            'logout' => ['auth', 'logout'],
+            'change_password' => ['auth', 'changePassword'],
+            'dashboard' => ['deployment', 'dashboard'],
+            'projects' => ['project', 'index'],
+            'project_edit' => ['project', 'edit'],
+            'project_delete' => ['project', 'delete'],
+            'servers' => ['server', 'index'],
+            'server_edit' => ['server', 'edit'],
+            'server_delete' => ['server', 'delete'],
+            'server_test' => ['server', 'test'],
+            'deploy' => ['deployment', 'deploy'],
+            'deployments' => ['deployment', 'index'],
+            'webhook' => ['deployment', 'webhook'],
+            'api' => ['api', 'handle'],
+        ];
+        
+        // 如果控制器存在，使用控制器
+        if (isset($routes[$action])) {
+            [$controllerName, $method] = $routes[$action];
+            $controller = $this->controllers[$controllerName] ?? null;
+            
+            if ($controller && method_exists($controller, $method)) {
+                $controller->$method();
+                return;
+            }
+        }
+        
+        // 如果控制器不存在，使用旧方法（向后兼容）
+        $oldMethod = 'handle' . str_replace('_', '', ucwords($action, '_'));
+        if (method_exists($this, $oldMethod)) {
+            $this->$oldMethod();
+            return;
+        }
+        
+        // 默认路由：仪表板
+        if (isset($this->controllers['deployment'])) {
+            $this->controllers['deployment']->dashboard();
+        } else {
+            $this->handleDashboard();
+        }
+    }
+    
+    // ========== 以下为旧方法，保留以保持向后兼容 ==========
+    // 如果控制器类不存在，这些方法会被调用
     private function handleLogin() {
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (!CSRF::validate()) { Logger::warning("CSRF validation failed on login"); $error = '安全验证失败，请重新提交'; } else { try { $username = Validator::validateUsername($_POST['username'] ?? ''); $password = $_POST['password'] ?? ''; if (empty($password)) {throw new InvalidArgumentException("密码不能为空");} Logger::info("Login attempt: username={$username}"); if ($this->auth->login($username, $password)) { Logger::info("Login successful: username={$username}"); CSRF::regenerateToken(); if ($this->auth->isDefaultPassword()) {header('Location: ?action=change_password&required=1');exit;} header('Location: ?action=dashboard');exit; } else { Logger::warning("Login failed: username={$username}"); $error = '用户名或密码错误'; } } catch (InvalidArgumentException $e) { Logger::warning("Login validation failed: " . $e->getMessage()); $error = $e->getMessage(); } } }
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            // 添加频率限制
+            try {
+                if (class_exists('RateLimiter')) {
+                    RateLimiter::check('login');
+                }
+            } catch (Exception $e) {
+                $this->renderLogin($e->getMessage());
+                return;
+            }
+            
+            if (!CSRF::validate()) {
+                Logger::warning("CSRF validation failed on login");
+                $error = '安全验证失败，请重新提交';
+            } else {
+                try {
+                    $username = Validator::validateUsername($_POST['username'] ?? '');
+                    $password = $_POST['password'] ?? '';
+                    if (empty($password)) {
+                        throw new InvalidArgumentException("密码不能为空");
+                    }
+                    Logger::info("Login attempt: username={$username}");
+                    
+                    if ($this->auth->login($username, $password)) {
+                        Logger::info("Login successful: username={$username}");
+                        if (class_exists('AuditLogger')) {
+                            AuditLogger::logLogin($username, true);
+                        }
+                        CSRF::regenerateToken();
+                        if ($this->auth->isDefaultPassword()) {
+                            header('Location: ?action=change_password&required=1');
+                            exit;
+                        }
+                        header('Location: ?action=dashboard');
+                        exit;
+                    } else {
+                        Logger::warning("Login failed: username={$username}");
+                        if (class_exists('AuditLogger')) {
+                            AuditLogger::logLogin($username, false, 'Invalid credentials');
+                        }
+                        $error = '用户名或密码错误';
+                    }
+                } catch (InvalidArgumentException $e) {
+                    Logger::warning("Login validation failed: " . $e->getMessage());
+                    if (class_exists('AuditLogger') && isset($username)) {
+                        AuditLogger::logLogin($username ?? 'unknown', false, $e->getMessage());
+                    }
+                    $error = $e->getMessage();
+                }
+            }
+        }
         $this->renderLogin($error ?? null);
     }
     private function handleLogout() {
+        $username = $this->auth->getUsername() ?? 'unknown';
         Logger::info("User logout");
-        $this->auth->logout();header('Location: ?action=login');exit;
+        if (class_exists('AuditLogger')) {
+            AuditLogger::log('logout', ['username' => $username]);
+        }
+        $this->auth->logout();
+        header('Location: ?action=login');
+        exit;
     }
     private function handleDashboard() {
         // 检查是否使用默认密码，如果是则强制跳转到修改密码页面
@@ -219,7 +324,22 @@ class Router {
                 $gitPassword = Validator::validatePassword($_POST['git_password'] ?? '', true);
                 if ($id && $project) { if ($gitPassword === '') { $data['git_password'] = $project['git_password'] ?? null; Logger::debug("Project edit: keeping old git_password (empty field provided)"); } else { $data['git_password'] = $gitPassword; Logger::debug("Project edit: updating git_password (new password provided, length=" . strlen($gitPassword) . ")"); } } else { $data['git_password'] = $gitPassword ?: null; Logger::debug("Project create: git_password=" . ($gitPassword ? "provided (length=" . strlen($gitPassword) . ")" : "null")); }
                 Logger::debug("Project save: git_username=" . ($data['git_username'] ?? 'null') . ", git_password=" . (isset($data['git_password']) && $data['git_password'] ? 'provided' : 'null'));
-                if ($id) { $validatedId = Validator::validateProjectId($id); $whereClause = 'id ' . '=' . ' ' . chr(63); $db->update('projects', $data, $whereClause, [$validatedId]); Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null')); } else { $data['created_at'] = date('Y-m-d H:i:s'); $id = $db->insert('projects', $data); Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null')); }
+                if ($id) {
+                    $validatedId = Validator::validateProjectId($id);
+                    $whereClause = 'id ' . '=' . ' ' . chr(63);
+                    $db->update('projects', $data, $whereClause, [$validatedId]);
+                    Logger::info("Project updated: id={$validatedId}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
+                    if (class_exists('AuditLogger')) {
+                        AuditLogger::logProject('updated', $validatedId, $data['name']);
+                    }
+                } else {
+                    $data['created_at'] = date('Y-m-d H:i:s');
+                    $id = $db->insert('projects', $data);
+                    Logger::info("Project created: id={$id}, name={$data['name']}, git_username=" . ($data['git_username'] ?? 'null'));
+                    if (class_exists('AuditLogger')) {
+                        AuditLogger::logProject('created', $id, $data['name']);
+                    }
+                }
                 
                 CSRF::regenerateToken(); // 成功后重新生成 token
                 $_SESSION['flash'] = ['type' => 'success', 'message' => $id ? '项目更新成功' : '项目创建成功'];
@@ -245,9 +365,13 @@ class Router {
             
             $id = Validator::validateProjectId($_GET['id'] ?? null);
             $db = Database::getInstance();
+            $project = $db->fetchOne("SELECT name FROM projects WHERE id = ?", [$id]);
             $whereClause = 'id ' . '=' . ' ' . chr(63);
             $db->delete('projects', $whereClause, [$id]);
             Logger::info("Project deleted: id={$id}");
+            if (class_exists('AuditLogger')) {
+                AuditLogger::logProject('deleted', $id, $project['name'] ?? null);
+            }
             $_SESSION['flash'] = ['type' => 'success', 'message' => '项目删除成功'];
         } catch (InvalidArgumentException $e) {
             Logger::warning("Project delete validation failed: " . $e->getMessage());
@@ -368,18 +492,62 @@ class Router {
         set_time_limit(600); // 10 分钟
         
         try {
+            // 添加频率限制
+            try {
+                if (class_exists('RateLimiter')) {
+                    RateLimiter::check('deploy');
+                }
+            } catch (Exception $e) {
+                $_SESSION['flash'] = ['type' => 'error', 'message' => $e->getMessage()];
+                header('Location: ?action=projects');
+                exit;
+            }
+            
             // 验证输入参数
             $projectId = Validator::validateProjectId($_GET['id'] ?? null);
             
             // 如果指定了 branch 参数，使用指定的；否则使用项目默认的
             $branch = null;
-            if (isset($_GET['branch']) && !empty(trim($_GET['branch']))) { $branch = Validator::validateBranch(trim($_GET['branch'])); } else { $db = Database::getInstance(); $project = $db->fetchOne("SELECT branch FROM projects WHERE id = ?", [$projectId]); if ($project) { $branch = $project['branch']; } else { throw new InvalidArgumentException("项目不存在"); } }
+            if (isset($_GET['branch']) && !empty(trim($_GET['branch']))) {
+                $branch = Validator::validateBranch(trim($_GET['branch']));
+            } else {
+                $db = Database::getInstance();
+                $project = $db->fetchOne("SELECT branch FROM projects WHERE id = ?", [$projectId]);
+                if ($project) {
+                    $branch = $project['branch'];
+                } else {
+                    throw new InvalidArgumentException("项目不存在");
+                }
+            }
+            
             // 验证 CSRF Token（如果是 POST 请求）
-            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) { Logger::warning("CSRF validation failed on deploy"); $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交']; header('Location: ?action=projects'); exit; }
+            if ($_SERVER['REQUEST_METHOD'] === 'POST' && !CSRF::validate()) {
+                Logger::warning("CSRF validation failed on deploy");
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '安全验证失败，请重新提交'];
+                header('Location: ?action=projects');
+                exit;
+            }
+            
+            // 记录部署开始
+            if (class_exists('AuditLogger')) {
+                AuditLogger::logDeployment('started', null, $projectId, $branch);
+            }
+            
             // 同步执行部署
             $deployer = new Deployer();
             $result = $deployer->deploy($projectId, $branch);
-            if ($result['success']) { $_SESSION['flash'] = ['type' => 'success', 'message' => '部署成功']; } else { $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')]; }
+            
+            // 记录部署结果
+            if (class_exists('AuditLogger') && isset($result['deployment_id'])) {
+                $status = $result['success'] ? 'completed' : 'failed';
+                AuditLogger::logDeployment($status, $result['deployment_id'], $projectId, $branch);
+            }
+            
+            if ($result['success']) {
+                $_SESSION['flash'] = ['type' => 'success', 'message' => '部署成功'];
+            } else {
+                $_SESSION['flash'] = ['type' => 'error', 'message' => '部署失败: ' . ($result['error'] ?? '未知错误')];
+            }
         } catch (InvalidArgumentException $e) {
             Logger::warning("Deploy validation failed: " . $e->getMessage());
             $_SESSION['flash'] = ['type' => 'error', 'message' => '参数错误: ' . $e->getMessage()];
@@ -410,7 +578,173 @@ class Router {
 
     private function handleWebhook() {
         // Webhook 处理逻辑
-        $this->renderJson(['status' => 'ok']);
+        $projectId = $_GET['project_id'] ?? null;
+        $token = $_GET['token'] ?? '';
+        
+        if (!$projectId || !$token) {
+            http_response_code(400);
+            $this->renderJson(['error' => 'Missing parameters: project_id and token are required']);
+            return;
+        }
+        
+        try {
+            $validatedProjectId = Validator::validateProjectId($projectId);
+            $db = Database::getInstance();
+            
+            // 验证项目存在且启用了 Webhook
+            $project = $db->fetchOne(
+                "SELECT * FROM projects WHERE id = ? AND webhook_enabled = 1",
+                [$validatedProjectId]
+            );
+            
+            if (!$project) {
+                Logger::warning("Webhook failed: project not found or webhook disabled, project_id={$validatedProjectId}");
+                http_response_code(404);
+                $this->renderJson(['error' => 'Project not found or webhook disabled']);
+                return;
+            }
+            
+            // 验证 Token
+            if ($project['webhook_token'] !== $token) {
+                Logger::warning("Webhook failed: invalid token, project_id={$validatedProjectId}");
+                http_response_code(403);
+                $this->renderJson(['error' => 'Invalid token']);
+                return;
+            }
+            
+            // 验证 Webhook 签名（GitHub/GitLab）
+            if (!$this->validateWebhookSignature($project)) {
+                Logger::warning("Webhook failed: invalid signature, project_id={$validatedProjectId}");
+                http_response_code(403);
+                $this->renderJson(['error' => 'Invalid signature']);
+                return;
+            }
+            
+            // 获取分支信息（从 Webhook payload）
+            $branch = $this->extractBranchFromWebhook();
+            if (!$branch) {
+                $branch = $project['branch']; // 使用项目默认分支
+            }
+            
+            Logger::info("Webhook triggered: project_id={$validatedProjectId}, branch={$branch}");
+            
+            // 记录审计日志
+            if (class_exists('AuditLogger')) {
+                AuditLogger::log('webhook_triggered', [
+                    'project_id' => $validatedProjectId,
+                    'project_name' => $project['name'],
+                    'branch' => $branch,
+                    'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+                ]);
+            }
+            
+            // 触发部署（异步，避免阻塞）
+            // 注意：这里使用同步方式，实际生产环境建议使用队列
+            try {
+                $deployer = new Deployer();
+                $result = $deployer->deploy($validatedProjectId, $branch);
+                
+                if ($result['success']) {
+                    Logger::info("Webhook deployment successful: project_id={$validatedProjectId}, deployment_id={$result['deployment_id']}");
+                    $this->renderJson([
+                        'status' => 'ok',
+                        'message' => 'Deployment triggered successfully',
+                        'deployment_id' => $result['deployment_id']
+                    ]);
+                } else {
+                    Logger::error("Webhook deployment failed: project_id={$validatedProjectId}, error=" . ($result['error'] ?? 'unknown'));
+                    http_response_code(500);
+                    $this->renderJson([
+                        'status' => 'error',
+                        'message' => 'Deployment failed: ' . ($result['error'] ?? 'unknown error')
+                    ]);
+                }
+            } catch (Exception $e) {
+                Logger::error("Webhook deployment exception: project_id={$validatedProjectId}, error=" . $e->getMessage());
+                http_response_code(500);
+                $this->renderJson([
+                    'status' => 'error',
+                    'message' => 'Deployment failed: ' . $e->getMessage()
+                ]);
+            }
+            
+        } catch (InvalidArgumentException $e) {
+            Logger::warning("Webhook validation failed: " . $e->getMessage());
+            http_response_code(400);
+            $this->renderJson(['error' => $e->getMessage()]);
+        } catch (Exception $e) {
+            Logger::error("Webhook handler exception: " . $e->getMessage());
+            http_response_code(500);
+            $this->renderJson(['error' => 'Internal server error']);
+        }
+    }
+    
+    /**
+     * 验证 Webhook 签名
+     */
+    private function validateWebhookSignature($project) {
+        // GitHub Webhook 验证
+        $githubSignature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+        if ($githubSignature) {
+            $payload = file_get_contents('php://input');
+            $expected = 'sha256=' . hash_hmac('sha256', $payload, $project['webhook_token']);
+            return hash_equals($expected, $githubSignature);
+        }
+        
+        // GitLab Webhook 验证
+        $gitlabToken = $_SERVER['HTTP_X_GITLAB_TOKEN'] ?? '';
+        if ($gitlabToken) {
+            return hash_equals($project['webhook_token'], $gitlabToken);
+        }
+        
+        // Gitee Webhook 验证
+        $giteeToken = $_SERVER['HTTP_X_GITEE_TOKEN'] ?? '';
+        if ($giteeToken) {
+            return hash_equals($project['webhook_token'], $giteeToken);
+        }
+        
+        // 如果没有签名头，仅验证 token（不推荐，但为了兼容性保留）
+        // 生产环境建议强制要求签名验证
+        return true;
+    }
+    
+    /**
+     * 从 Webhook payload 中提取分支信息
+     */
+    private function extractBranchFromWebhook() {
+        $payload = file_get_contents('php://input');
+        if (empty($payload)) {
+            return null;
+        }
+        
+        $data = json_decode($payload, true);
+        if (!$data) {
+            return null;
+        }
+        
+        // GitHub Webhook 格式
+        if (isset($data['ref'])) {
+            // ref 格式: refs/heads/master
+            if (preg_match('/^refs\/heads\/(.+)$/', $data['ref'], $matches)) {
+                return $matches[1];
+            }
+        }
+        
+        // GitLab Webhook 格式
+        if (isset($data['ref'])) {
+            // ref 格式: refs/heads/master 或 master
+            if (strpos($data['ref'], 'refs/heads/') === 0) {
+                return substr($data['ref'], 11);
+            }
+            return $data['ref'];
+        }
+        
+        // Gitee Webhook 格式
+        if (isset($data['ref'])) {
+            return $data['ref'];
+        }
+        
+        return null;
     }
 
     private function handleChangePassword() {
@@ -451,14 +785,9 @@ class Router {
         $endpoint = $_GET['endpoint'] ?? '';
         
         switch ($endpoint) {
-            case 'deploy_status':
-                $this->apiDeployStatus();
-                break;
-            case 'deploy_log':
-                $this->apiDeployLog();
-                break;
-            default:
-                $this->renderJson(['error' => 'Invalid endpoint'], 404);
+            case 'deploy_status': $this->apiDeployStatus(); break;
+            case 'deploy_log': $this->apiDeployLog(); break;
+            default: $this->renderJson(['error' => 'Invalid endpoint'], 404);
         }
     }
 

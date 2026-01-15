@@ -68,20 +68,7 @@ class Database {
         if (!$hasGitPassword) { $this->db->exec("ALTER TABLE projects ADD COLUMN git_password TEXT"); }
         
         // 部署历史表
-        $this->db->exec("CREATE TABLE IF NOT EXISTS deployments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id INTEGER NOT NULL,
-            branch TEXT NOT NULL,
-            commit_hash TEXT,
-            commit_message TEXT,
-            status TEXT DEFAULT 'pending',
-            output TEXT,
-            error TEXT,
-            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            finished_at DATETIME,
-            FOREIGN KEY (project_id) REFERENCES projects(id)
-        )");
-        
+        $this->db->exec("CREATE TABLE IF NOT EXISTS deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch TEXT NOT NULL, commit_hash TEXT, commit_message TEXT, status TEXT DEFAULT 'pending', output TEXT, error TEXT, started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME, FOREIGN KEY (project_id) REFERENCES projects(id))");
         // 创建默认管理员用户（如果不存在）
         $stmt = $this->db->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
         $stmt->execute(['admin']);
@@ -141,8 +128,7 @@ class Database {
         // 禁止SQL注释符号（防止注释注入攻击）
         if (preg_match('/--|\/\*|\*\/|#/', $where)) { throw new InvalidArgumentException("WHERE子句不能包含SQL注释符号"); }
         // 禁止SQL关键字（防止SQL注入）
-        $forbiddenKeywords = ['union', 'select', 'insert', 'update', 'delete', 'drop', 'create', 'alter', 
-                             'exec', 'execute', 'script', 'javascript', 'onload', 'onerror', 'or', 'and'];
+        $forbiddenKeywords = ['union', 'select', 'insert', 'update', 'delete', 'drop', 'create', 'alter', 'exec', 'execute', 'script', 'javascript', 'onload', 'onerror', 'or', 'and'];
         $whereLower = strtolower($where);
         foreach ($forbiddenKeywords as $keyword) {
             if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $whereLower)) { throw new InvalidArgumentException("WHERE子句不能包含SQL关键字: {$keyword}"); }
