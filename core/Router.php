@@ -9,23 +9,20 @@ class Router {
     
     public function __construct() {
         $this->auth = new Auth();
-        
-        // 延迟加载控制器（如果类存在）
-        if (class_exists('AuthController')) {
-            $this->controllers['auth'] = new AuthController();
+        // 控制器延迟加载，只在需要时创建实例
+    }
+    
+    /**
+     * 获取控制器实例（延迟加载）
+     */
+    private function getController($name) {
+        if (!isset($this->controllers[$name])) {
+            $className = ucfirst($name) . 'Controller';
+            if (class_exists($className)) {
+                $this->controllers[$name] = new $className();
+            }
         }
-        if (class_exists('ProjectController')) {
-            $this->controllers['project'] = new ProjectController();
-        }
-        if (class_exists('ServerController')) {
-            $this->controllers['server'] = new ServerController();
-        }
-        if (class_exists('DeploymentController')) {
-            $this->controllers['deployment'] = new DeploymentController();
-        }
-        if (class_exists('ApiController')) {
-            $this->controllers['api'] = new ApiController();
-        }
+        return $this->controllers[$name] ?? null;
     }
     
     public function handle() {
@@ -71,10 +68,10 @@ class Router {
             'api' => ['api', 'handle'],
         ];
         
-        // 如果控制器存在，使用控制器
+        // 如果控制器存在，使用控制器（延迟加载）
         if (isset($routes[$action])) {
             [$controllerName, $method] = $routes[$action];
-            $controller = $this->controllers[$controllerName] ?? null;
+            $controller = $this->getController($controllerName);
             
             if ($controller && method_exists($controller, $method)) {
                 $controller->$method();
@@ -90,8 +87,9 @@ class Router {
         }
         
         // 默认路由：仪表板
-        if (isset($this->controllers['deployment'])) {
-            $this->controllers['deployment']->dashboard();
+        $deploymentController = $this->getController('deployment');
+        if ($deploymentController) {
+            $deploymentController->dashboard();
         } else {
             $this->handleDashboard();
         }

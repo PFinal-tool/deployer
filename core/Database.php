@@ -69,6 +69,8 @@ class Database {
         
         // 部署历史表
         $this->db->exec("CREATE TABLE IF NOT EXISTS deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, branch TEXT NOT NULL, commit_hash TEXT, commit_message TEXT, status TEXT DEFAULT 'pending', output TEXT, error TEXT, started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME, FOREIGN KEY (project_id) REFERENCES projects(id))");
+        // 创建数据库索引以提升查询性能
+        $this->createIndexes();
         // 创建默认管理员用户（如果不存在）
         $stmt = $this->db->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
         $stmt->execute(['admin']);
@@ -223,6 +225,19 @@ class Database {
         $stmt->execute($whereParams);
         
         return $stmt->rowCount();
+    }
+    
+    /**
+     * 创建数据库索引以提升查询性能
+     */
+    private function createIndexes() {
+        // 部署表索引
+        $this->db->exec("CREATE INDEX IF NOT EXISTS idx_deployments_project_id ON deployments(project_id)");
+        $this->db->exec("CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status)");
+        $this->db->exec("CREATE INDEX IF NOT EXISTS idx_deployments_started_at ON deployments(started_at DESC)");
+        // 项目表索引
+        $this->db->exec("CREATE INDEX IF NOT EXISTS idx_projects_server_id ON projects(server_id)");
+        // 用户表索引（username 已有 UNIQUE 约束，自动创建索引）
     }
     
     public function getPDO() {
