@@ -79,25 +79,24 @@ class Deployer {
             
             if (!$project) { throw new Exception("Project not found"); }
             if ($branch === null) { $branch = $project['branch']; }
-            // 获取服务器信息
             $server = $this->db->fetchOne("SELECT * FROM servers WHERE id = ?", [$project['server_id']]);
             if (!$server) { throw new Exception("Server not found"); }
-            
-            // 创建部署记录
+
+            $lockHandle = $this->acquireDeploymentLock($projectId);
+
             $deploymentId = $this->db->insert('deployments', [
                 'project_id' => $projectId,
                 'branch' => $branch,
                 'status' => 'running',
                 'started_at' => date('Y-m-d H:i:s')
             ]);
-            
+
             Logger::info("Starting deployment: project_id={$projectId}, branch={$branch}, deployment_id={$deploymentId}");
             
-            // 获取部署锁（防止并发部署）
-            $lockHandle = $this->acquireDeploymentLock($projectId);
-            
         } catch (Exception $e) {
-            // 如果连部署记录都无法创建，记录错误并返回
+            if ($lockHandle) {
+                $this->releaseDeploymentLock($lockHandle);
+            }
             Logger::error("Failed to initialize deployment: " . $e->getMessage());
             throw $e;
         }
@@ -320,22 +319,17 @@ class Deployer {
             throw $e;
         }
         
-        $tempScript = tempnam(sys_get_temp_dir(), 'deploy_script_');
+        $encoded = base64_encode($script);
+        $command = sprintf(
+            'cd %s && echo %s | base64 -d | bash',
+            escapeshellarg($deployPath),
+            escapeshellarg($encoded)
+        );
         try {
-            file_put_contents($tempScript, $script);
-            chmod($tempScript, 0755);
-            
-            $command = sprintf(
-                "cd %s && %s",
-                escapeshellarg($deployPath),
-                escapeshellarg($tempScript)
-            );
-            
-            try {
-                return $sshExecutor->execute($command);
-            } catch (Exception $e) { Logger::error("Script execution failed: " . $e->getMessage()); return "Error: " . $e->getMessage(); }
-        } finally {
-            @unlink($tempScript);
+            return $sshExecutor->execute($command);
+        } catch (Exception $e) {
+            Logger::error("Script execution failed: " . $e->getMessage());
+            return "Error: " . $e->getMessage();
         }
     }
     

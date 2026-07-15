@@ -1,59 +1,46 @@
 <?php
-/**
- * API 控制器
- */
 class ApiController extends BaseController {
-    
-    /**
-     * 处理 API 请求
-     */
-    public function handle() {
+
+    public function handle(): void {
         $this->requireLogin();
-        
+        RateLimiter::check('api');
         $endpoint = $_GET['endpoint'] ?? '';
-        
-        switch ($endpoint) {
-            case 'deploy_status': $this->deployStatus(); break;
-            case 'deploy_log': $this->deployLog(); break;
-            default: $this->renderJson(['error' => 'Invalid endpoint'], 404);
+
+        if ($endpoint === 'deploy_status') {
+            $this->deployStatus();
+        } elseif ($endpoint === 'deploy_log') {
+            $this->deployLog();
+        } else {
+            $this->renderJson(['error' => 'Invalid endpoint'], 404);
         }
     }
-    
-    /**
-     * 获取部署状态
-     */
-    private function deployStatus() {
+
+    private function deployStatus(): void {
         try {
             $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
-            $deployment = $this->db->fetchOne("SELECT * FROM deployments WHERE id = ?", [$deploymentId]);
-            
+            $deployment = $this->db->fetchOne(
+                'SELECT id, project_id, branch, commit_hash, status, started_at, finished_at FROM deployments WHERE id = ?',
+                [$deploymentId]
+            );
             $this->renderJson($deployment ?: ['error' => 'Not found'], $deployment ? 200 : 404);
         } catch (InvalidArgumentException $e) {
-            Logger::warning("API deploy status validation failed: " . $e->getMessage());
             $this->renderJson(['error' => $e->getMessage()], 400);
         }
     }
-    
-    /**
-     * 获取部署日志
-     */
-    private function deployLog() {
+
+    private function deployLog(): void {
         try {
             $deploymentId = Validator::validateDeploymentId($_GET['deployment_id'] ?? null);
-            $deployment = $this->db->fetchOne("SELECT output, error, status FROM deployments WHERE id = ?", [$deploymentId]);
-            if (!$deployment) { $this->renderJson(['error' => 'Not found'], 404); return; }
-            $logContent = '';
-            if (!empty($deployment['output'])) { $logContent .= $deployment['output']; }
-            if (!empty($deployment['error'])) { if (!empty($logContent)) { $logContent .= "\n\n"; } $logContent .= "错误信息: " . $deployment['error']; }
-            if (empty($logContent)) { $logContent = '暂无日志'; }
-            
+            $deployment = $this->db->fetchOne('SELECT output, error, status FROM deployments WHERE id = ?', [$deploymentId]);
+            if (!$deployment) {
+                $this->renderJson(['error' => 'Not found'], 404);
+            }
             $this->renderJson([
-                'output' => $logContent,
+                'output' => fn_deploy_log_text($deployment),
                 'error' => $deployment['error'] ?? null,
-                'status' => $deployment['status'] ?? 'unknown'
+                'status' => $deployment['status'] ?? 'unknown',
             ]);
         } catch (InvalidArgumentException $e) {
-            Logger::warning("API deploy log validation failed: " . $e->getMessage());
             $this->renderJson(['error' => $e->getMessage()], 400);
         }
     }

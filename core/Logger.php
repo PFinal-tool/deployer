@@ -11,7 +11,7 @@ class Logger {
     
     public static function init($logDir = null) {
         if (self::$initialized) { return; }
-        if ($logDir === null) { $logDir = __DIR__ . '/../storage/logs'; }
+        if ($logDir === null) { $logDir = fn_storage_dir() . '/logs'; }
         if (!is_dir($logDir)) { @mkdir($logDir, 0755, true); }
         self::$logDir = $logDir;
         self::$logFile = $logDir . '/deployer_' . date('Y-m-d') . '.log';

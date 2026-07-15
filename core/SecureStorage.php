@@ -14,7 +14,7 @@ class SecureStorage {
     private static function getKey(): string {
         if (self::$key !== null) { return self::$key; }
         $key = getenv('DEPLOYER_ENCRYPTION_KEY');
-        if (empty($key)) { $configFile = __DIR__ . '/../storage/.encryption_key'; if (file_exists($configFile)) { $key = trim(file_get_contents($configFile)); } else { $key = self::generateKey(); @file_put_contents($configFile, $key); @chmod($configFile, 0600); } }
+        if (empty($key)) { $configFile = fn_storage_dir() . '/.encryption_key'; if (file_exists($configFile)) { $key = trim(file_get_contents($configFile)); } else { $key = self::generateKey(); @file_put_contents($configFile, $key); @chmod($configFile, 0600); } }
         if (strlen($key) < 32) { $key = hash('sha256', $key, true); } elseif (strlen($key) > 32) { $key = substr($key, 0, 32); }
         
         self::$key = $key;

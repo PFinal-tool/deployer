@@ -3,6 +3,7 @@ storage/*.db
 storage/logs/*.log
 storage/deployer.db
 storage/deployer.db-journal
+storage/.encryption_key
 
 # 编译后的单文件
 deployer-single.php

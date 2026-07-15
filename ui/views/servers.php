@@ -1,76 +1,31 @@
 <?php
-require_once __DIR__ . '/../css.php';
-require_once __DIR__ . '/../js.php';
-require_once __DIR__ . '/../../lang/zh.php';
+ui_page_open(Lang::get('servers'), 'servers');
+ui_sshpass_alert();
+ui_flash();
+ui_panel_open(Lang::get('servers'), '?action=server_edit', '添加服务器');
 ?>
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo Lang::get('servers'); ?> - <?php echo Lang::get('title'); ?></title>
-    <?php echo getCSS(); ?>
-</head>
-<body>
-<div class="header"><div class="wrap">
-  <table><tr>
-    <td><strong><?php echo Lang::get('servers'); ?></strong></td>
-    <td style="text-align:right">
-      <a href="?action=dashboard" class="btn"><?php echo Lang::get('dashboard'); ?></a>
-      <a href="?action=projects" class="btn"><?php echo Lang::get('projects'); ?></a>
-      <a href="?action=servers" class="btn"><?php echo Lang::get('servers'); ?></a>
-      <a href="?action=deployments" class="btn"><?php echo Lang::get('deployments'); ?></a>
-      <a href="?action=logout" class="btn btn-danger"><?php echo Lang::get('logout'); ?></a>
+<table class="tbl" width="100%" cellpadding="0" cellspacing="0">
+  <tr>
+    <th><?php echo h(Lang::get('server_name')); ?></th>
+    <th><?php echo h(Lang::get('host')); ?></th>
+    <th><?php echo h(Lang::get('port')); ?></th>
+    <th><?php echo h(Lang::get('username')); ?></th>
+    <th class="actions"><?php echo h(Lang::get('actions')); ?></th>
+  </tr>
+  <?php if (empty($servers)): ?>
+  <tr><td colspan="5" class="empty">暂无服务器，<a href="?action=server_edit">添加服务器</a></td></tr>
+  <?php else: foreach ($servers as $s): ?>
+  <tr>
+    <td><strong><?php echo h($s['name']); ?></strong></td>
+    <td class="mono"><?php echo h($s['host']); ?></td>
+    <td><?php echo h($s['port']); ?></td>
+    <td><?php echo h($s['username']); ?></td>
+    <td class="actions">
+      <?php ui_post_action('server_test', (int)$s['id'], '测试'); ?>
+      <?php ui_btn('?action=server_edit&id=' . (int)$s['id'], Lang::get('edit')); ?>
+      <?php ui_post_action('server_delete', (int)$s['id'], Lang::get('delete'), 'danger', '确定删除此服务器?'); ?>
     </td>
-  </tr></table>
-
-</div></div>
-
-<div class="wrap">
-  <?php if (!empty($_SESSION['flash'])): $f=$_SESSION['flash']; unset($_SESSION['flash']); ?>
-    <div class="alert<?php echo ($f['type'] ?? '') === 'success' ? ' alert-success' : ''; ?>"><?php echo htmlspecialchars($f['message'] ?? ''); ?></div>
-  <?php endif; ?>
-
-  <table>
-    <thead>
-      <tr>
-        <th><?php echo Lang::get('servers'); ?></th>
-        <th style="text-align:right"><a href="?action=server_edit" class="btn btn-small">添加服务器</a></th>
-      </tr>
-    </thead>
-  </table>
-
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th><?php echo Lang::get('server_name'); ?></th>
-        <th><?php echo Lang::get('host'); ?></th>
-        <th><?php echo Lang::get('port'); ?></th>
-        <th><?php echo Lang::get('username'); ?></th>
-        <th><?php echo Lang::get('actions'); ?></th>
-      </tr>
-    </thead>
-    <tbody>
-      <?php if (empty($servers)): ?>
-        <tr><td colspan="5">暂无服务器，<a href="?action=server_edit">添加服务器</a></td></tr>
-      <?php else: foreach ($servers as $server): ?>
-        <tr>
-          <td><?php echo htmlspecialchars($server['name']); ?></td>
-          <td><?php echo htmlspecialchars($server['host']); ?></td>
-          <td><?php echo htmlspecialchars($server['port']); ?></td>
-          <td><?php echo htmlspecialchars($server['username']); ?></td>
-          <td>
-            <a href="?action=server_test&id=<?php echo $server['id']; ?>" class="btn btn-small">测试连接</a>
-            <a href="?action=server_edit&id=<?php echo $server['id']; ?>" class="btn btn-small"><?php echo Lang::get('edit'); ?></a>
-            <a href="?action=server_delete&id=<?php echo $server['id']; ?>" class="btn btn-small btn-danger" onclick="return confirmDelete('确定要删除此服务器吗？')"><?php echo Lang::get('delete'); ?></a>
-          </td>
-        </tr>
-      <?php endforeach; endif; ?>
-    </tbody>
-  </table>
-</div>
-
-<?php echo getJS(); ?>
-</body>
-</html>
-
+  </tr>
+  <?php endforeach; endif; ?>
+</table>
+<?php ui_panel_close(); ui_page_close(); ?>

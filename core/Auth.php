@@ -10,7 +10,7 @@ class Auth {
     public function __construct() {
         $this->db = Database::getInstance();
         
-        if (session_status() === PHP_SESSION_NONE) { if (isset($_COOKIE['deployer_session'])) { $sessionId = $_COOKIE['deployer_session']; if (!preg_match('/^[a-zA-Z0-9,-]+$/', $sessionId)) { unset($_COOKIE['deployer_session']); Logger::warning("Invalid session ID detected: " . substr($sessionId, 0, 10) . "..."); } } ini_set('session.cookie_httponly', 1); ini_set('session.use_strict_mode', 1); ini_set('session.cookie_samesite', 'Strict'); if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') { ini_set('session.cookie_secure', 1); } session_name('deployer_session'); session_start(); if (!isset($_SESSION['created'])) { $_SESSION['created'] = time(); } elseif (time() - $_SESSION['created'] > 1800) { session_regenerate_id(true); $_SESSION['created'] = time(); Logger::debug("Session ID regenerated for security"); } }
+        if (session_status() === PHP_SESSION_NONE) { if (isset($_COOKIE['deployer_session'])) { $sessionId = $_COOKIE['deployer_session']; if (!preg_match('/^[a-zA-Z0-9,-]+$/', $sessionId)) { unset($_COOKIE['deployer_session']); Logger::warning("Invalid session ID detected: " . substr($sessionId, 0, 10) . "..."); } } ini_set('session.cookie_httponly', 1); ini_set('session.use_strict_mode', 1); ini_set('session.cookie_samesite', 'Strict'); if (fn_is_https()) { ini_set('session.cookie_secure', 1); } session_name('deployer_session'); session_start(); if (!isset($_SESSION['created'])) { $_SESSION['created'] = time(); } elseif (time() - $_SESSION['created'] > 1800) { session_regenerate_id(true); $_SESSION['created'] = time(); Logger::debug("Session ID regenerated for security"); } }
     }
     
     public function login($username, $password) {
@@ -22,7 +22,19 @@ class Auth {
             [$username]
         );
         
-        if ($user && password_verify($password, $user['password'])) { $this->clearLoginAttempts($username); $_SESSION['user_id'] = $user['id']; $_SESSION['username'] = $user['username']; $_SESSION['is_default_password'] = ($user['is_default_password'] ?? 0) ==1; Logger::info("User {$username} logged in"); return true; }
+        if ($user && password_verify($password, $user['password'])) {
+            session_regenerate_id(true);
+            $this->clearLoginAttempts($username);
+            $_SESSION['user_id'] = $user['id'];
+            $_SESSION['username'] = $user['username'];
+            $_SESSION['is_default_password'] = ($user['is_default_password'] ?? 0) == 1;
+            $_SESSION['created'] = time();
+            if (class_exists('CSRF')) {
+                CSRF::regenerateToken();
+            }
+            Logger::info("User {$username} logged in");
+            return true;
+        }
         
         // 登录失败，记录失败次数
         $this->recordFailedLogin($username);

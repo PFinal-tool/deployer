@@ -10,7 +10,7 @@ class AuditLogger {
      * 初始化审计日志
      */
     public static function init() {
-        $logDir = __DIR__ . '/../storage/logs';
+        $logDir = fn_storage_dir() . '/logs';
         if (!is_dir($logDir)) { @mkdir($logDir, 0755, true); }
         self::$logFile = $logDir . '/audit_' . date('Y-m-d') . '.log';
     }
@@ -114,7 +114,7 @@ class AuditLogger {
         if (self::$logFile === null) { self::init(); }
         
         $logs = [];
-        $files = glob(__DIR__ . '/../storage/logs/audit_*.log');
+        $files = glob(fn_storage_dir() . '/logs/audit_*.log');
         
         // 按日期排序，最新的在前
         rsort($files);

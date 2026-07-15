@@ -5,9 +5,10 @@
  */
 class RateLimiter {
     private static $limits = [
-        'login' => ['max' => 5, 'window' => 300],      // 5次/5分钟
-        'deploy' => ['max' => 10, 'window' => 3600],   // 10次/小时
-        'api' => ['max' => 100, 'window' => 3600],     // 100次/小时
+        'login' => ['max' => 5, 'window' => 300],
+        'deploy' => ['max' => 10, 'window' => 3600],
+        'api' => ['max' => 100, 'window' => 3600],
+        'webhook' => ['max' => 60, 'window' => 3600],
     ];
     
     /**

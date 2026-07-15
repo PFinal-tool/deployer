@@ -19,7 +19,7 @@ class Database {
     ];
     
     private function __construct($dbFile = null) {
-        if ($dbFile === null) { $dbFile = __DIR__ . '/../storage/deployer.db';}
+        if ($dbFile === null) { $dbFile = fn_storage_dir() . '/deployer.db';}
         $dir = dirname($dbFile);
         if (!is_dir($dir)) { @mkdir($dir, 0755, true);}
         $this->dbFile = $dbFile;
@@ -87,7 +87,13 @@ class Database {
         $result = $this->query($sql, $params)->fetch();
         
         // 如果是查询结果，解密敏感字段
-        if ($result && is_array($result)) { if (isset($result['password']) || isset($result['key_content'])) { $decryptFields = []; if (isset($result['password'])) $decryptFields[] = 'password'; if (isset($result['key_content'])) $decryptFields[] = 'key_content'; if (class_exists('SecureStorage')) { $result = SecureStorage::decryptFields($result, $decryptFields); } } elseif (isset($result['git_password'])) { if (class_exists('SecureStorage')) { $result = SecureStorage::decryptFields($result, ['git_password']); } } }
+        if ($result && is_array($result)) {
+            if (isset($result['host'])) {
+                $result = SecureStorage::decryptFields($result, ['password', 'key_content']);
+            } elseif (isset($result['repo_url']) && isset($result['git_password'])) {
+                $result = SecureStorage::decryptFields($result, ['git_password']);
+            }
+        }
         
         return $result;
     }
@@ -96,7 +102,22 @@ class Database {
         $results = $this->query($sql, $params)->fetchAll();
         
         // 批量解密敏感字段
-        if (!empty($results) && is_array($results[0])) { $firstRow = $results[0]; $decryptFields = []; if (isset($firstRow['password']) || isset($firstRow['key_content'])) { if (isset($firstRow['password'])) $decryptFields[] = 'password'; if (isset($firstRow['key_content'])) $decryptFields[] = 'key_content'; } elseif (isset($firstRow['git_password'])) { $decryptFields[] = 'git_password'; } if (!empty($decryptFields) && class_exists('SecureStorage')) { foreach ($results as &$row) { $row = SecureStorage::decryptFields($row, $decryptFields); } unset($row); } }
+        if (!empty($results) && is_array($results[0])) {
+            $firstRow = $results[0];
+            if (isset($firstRow['host'])) {
+                foreach ($results as &$row) {
+                    $row = SecureStorage::decryptFields($row, ['password', 'key_content']);
+                }
+                unset($row);
+            } elseif (isset($firstRow['repo_url'])) {
+                foreach ($results as &$row) {
+                    if (isset($row['git_password'])) {
+                        $row = SecureStorage::decryptFields($row, ['git_password']);
+                    }
+                }
+                unset($row);
+            }
+        }
         
         return $results;
     }
